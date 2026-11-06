@@ -1,0 +1,20 @@
+[
+  {
+    "SKU": "AJC-D5S",
+    "StockItemId": "22222222-0000-0000-0000-000000000001",
+    "LocationId": "10000000-0000-0000-0000-000000000001",
+    "LocationName": "CA | AJC Ontario",
+    "Level": 200,
+    "InOrderBook": 15,
+    "Available": 185
+  },
+  {
+    "SKU": "AJC-CA-ONLY",
+    "StockItemId": "22222222-0000-0000-0000-000000000002",
+    "LocationId": "10000000-0000-0000-0000-000000000001",
+    "LocationName": "CA | AJC Ontario",
+    "Level": 90,
+    "InOrderBook": 2,
+    "Available": 88
+  }
+]

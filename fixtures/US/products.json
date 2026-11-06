@@ -1,0 +1,35 @@
+[
+  {
+    "StockItemId": "11111111-0000-0000-0000-000000000001",
+    "ItemNumber": "AJC-D5S",
+    "ItemTitle": "AJC Brand 12V 5Ah Sealed Lead Acid Battery",
+    "PurchasePrice": 18.5000,
+    "RetailPrice": 39.99,
+    "CategoryName": "SLA Batteries",
+    "BarcodeNumber": "850012345001",
+    "Weight": 1.650,
+    "CreationDate": "2024-01-15T08:00:00Z"
+  },
+  {
+    "StockItemId": "11111111-0000-0000-0000-000000000002",
+    "ItemNumber": "AJC-D12S",
+    "ItemTitle": "AJC Brand 12V 12Ah Sealed Lead Acid Battery",
+    "PurchasePrice": 28.7500,
+    "RetailPrice": 59.99,
+    "CategoryName": "SLA Batteries",
+    "BarcodeNumber": "850012345002",
+    "Weight": 3.800,
+    "CreationDate": "2024-02-10T09:30:00Z"
+  },
+  {
+    "StockItemId": "11111111-0000-0000-0000-000000000003",
+    "ItemNumber": "UB1280-GEN",
+    "ItemTitle": "Universal Power Group 12V 8Ah Replacement",
+    "PurchasePrice": 22.0000,
+    "RetailPrice": 44.99,
+    "CategoryName": "OEM Replacements",
+    "BarcodeNumber": "850012345003",
+    "Weight": 2.500,
+    "CreationDate": "2024-03-01T11:15:00Z"
+  }
+]

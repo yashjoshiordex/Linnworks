@@ -1,0 +1,14 @@
+[
+  {
+    "StockLocationId": "00000000-0000-0000-0000-000000000001",
+    "LocationName": "US | AJC Main",
+    "IsDefault": true,
+    "IsFulfillmentCenter": true
+  },
+  {
+    "StockLocationId": "00000000-0000-0000-0000-000000000002",
+    "LocationName": "US | West Coast 3PL",
+    "IsDefault": false,
+    "IsFulfillmentCenter": true
+  }
+]

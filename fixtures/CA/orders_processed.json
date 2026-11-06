@@ -1,0 +1,75 @@
+[
+  {
+    "OrderId": "55555555-0000-0000-0000-000000000201",
+    "NumOrderId": "200201",
+    "GeneralInfo": {
+      "Status": 2,
+      "HoldOrParked": false,
+      "Source": "SHOPIFY",
+      "SubSource": "BatteryClerk CA",
+      "ReferenceNum": "SHPF-CA-3002",
+      "ReceivedDate": "2026-11-02T10:00:00Z",
+      "DispatchByDate": "2026-11-03T18:00:00Z",
+      "FolderName": ["Dispatched"]
+    },
+    "ShippingInfo": {
+      "PostalServiceName": "Canada Post Regular",
+      "Vendor": "Canada Post",
+      "TrackingNumber": "CP777888999CA",
+      "TotalCharge": 11.00
+    },
+    "CustomerInfo": {
+      "ChannelBuyerName": "Mock Buyer Montreal",
+      "Address": {
+        "FullName": "Mock Buyer Montreal",
+        "Company": "",
+        "Address1": "1200 Rue Sainte-Catherine",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Montreal",
+        "Region": "QC",
+        "PostCode": "H3B 1H4",
+        "Country": "Canada",
+        "PhoneNumber": "514-555-0188",
+        "EmailAddress": "mock.montreal@example.ca"
+      },
+      "BillingAddress": {
+        "FullName": "Mock Buyer Montreal",
+        "Company": "",
+        "Address1": "1200 Rue Sainte-Catherine",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Montreal",
+        "Region": "QC",
+        "PostCode": "H3B 1H4",
+        "Country": "Canada",
+        "PhoneNumber": "514-555-0188",
+        "EmailAddress": "mock.montreal@example.ca"
+      }
+    },
+    "TotalsInfo": {
+      "Subtotal": 69.99,
+      "Tax": 10.50,
+      "PostageCost": 11.00,
+      "TotalCharge": 91.49,
+      "Currency": "CAD",
+      "PaymentMethod": "Credit Card"
+    },
+    "FulfilmentLocationId": "10000000-0000-0000-0000-000000000001",
+    "ProcessedDate": "2026-11-03T14:00:00Z",
+    "Items": [
+      {
+        "RowId": "66666666-0000-0000-0000-000000000201",
+        "SKU": "AJC-CA-ONLY",
+        "Title": "AJC Canadian Winter Spec 12V Battery",
+        "Quantity": 1,
+        "PricePerUnit": 69.99,
+        "LineDiscount": 0.00,
+        "TaxRate": 15.00,
+        "Tax": 10.50,
+        "CostIncTax": 80.49,
+        "StockItemId": "22222222-0000-0000-0000-000000000002"
+      }
+    ]
+  }
+]

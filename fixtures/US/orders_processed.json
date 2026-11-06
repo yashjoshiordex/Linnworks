@@ -1,0 +1,306 @@
+[
+  {
+    "OrderId": "33333333-0000-0000-0000-000000000201",
+    "NumOrderId": "100201",
+    "GeneralInfo": {
+      "Status": 2,
+      "HoldOrParked": false,
+      "Source": "SHOPIFY",
+      "SubSource": "BatteryClerk US",
+      "ReferenceNum": "SHPF-US-9701",
+      "ReceivedDate": "2026-11-03T10:00:00Z",
+      "DispatchByDate": "2026-11-04T18:00:00Z",
+      "FolderName": ["Dispatched"]
+    },
+    "ShippingInfo": {
+      "PostalServiceName": "USPS Priority",
+      "Vendor": "USPS",
+      "TrackingNumber": "9400111899562549300001",
+      "TotalCharge": 7.50
+    },
+    "CustomerInfo": {
+      "ChannelBuyerName": "Mock Buyer Shipped",
+      "Address": {
+        "FullName": "Mock Buyer Shipped",
+        "Company": "Power Solutions LLC",
+        "Address1": "55 Maple Ave",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Denver",
+        "Region": "CO",
+        "PostCode": "80201",
+        "Country": "United States",
+        "PhoneNumber": "555-020-0001",
+        "EmailAddress": "shipped.buyer@example.com"
+      },
+      "BillingAddress": {
+        "FullName": "Mock Buyer Shipped",
+        "Company": "Power Solutions LLC",
+        "Address1": "55 Maple Ave",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Denver",
+        "Region": "CO",
+        "PostCode": "80201",
+        "Country": "United States",
+        "PhoneNumber": "555-020-0001",
+        "EmailAddress": "shipped.buyer@example.com"
+      }
+    },
+    "TotalsInfo": {
+      "Subtotal": 39.99,
+      "Tax": 3.30,
+      "PostageCost": 7.50,
+      "TotalCharge": 50.79,
+      "Currency": "USD",
+      "PaymentMethod": "Shopify Payments"
+    },
+    "FulfilmentLocationId": "00000000-0000-0000-0000-000000000001",
+    "ProcessedDate": "2026-11-04T11:30:00Z",
+    "Items": [
+      {
+        "RowId": "44444444-0000-0000-0000-000000000201",
+        "SKU": "AJC-D5S",
+        "Title": "AJC Brand 12V 5Ah Sealed Lead Acid Battery",
+        "Quantity": 1,
+        "PricePerUnit": 39.99,
+        "LineDiscount": 0.00,
+        "TaxRate": 8.25,
+        "Tax": 3.30,
+        "CostIncTax": 43.29,
+        "StockItemId": "11111111-0000-0000-0000-000000000001"
+      }
+    ]
+  },
+  {
+    "OrderId": "33333333-0000-0000-0000-000000000202",
+    "NumOrderId": "100202",
+    "GeneralInfo": {
+      "Status": 3,
+      "HoldOrParked": false,
+      "Source": "SHOPIFY",
+      "SubSource": "BatteryClerk US",
+      "ReferenceNum": "SHPF-US-9702",
+      "ReceivedDate": "2026-11-02T08:15:00Z",
+      "DispatchByDate": "2026-11-03T18:00:00Z",
+      "FolderName": ["Cancelled Orders"]
+    },
+    "ShippingInfo": {
+      "PostalServiceName": "Standard Ground",
+      "Vendor": "FedEx",
+      "TrackingNumber": "",
+      "TotalCharge": 0.00
+    },
+    "CustomerInfo": {
+      "ChannelBuyerName": "Mock Buyer Cancelled",
+      "Address": {
+        "FullName": "Mock Buyer Cancelled",
+        "Company": "",
+        "Address1": "12 Elm St",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Phoenix",
+        "Region": "AZ",
+        "PostCode": "85001",
+        "Country": "United States",
+        "PhoneNumber": "555-020-0002",
+        "EmailAddress": "cancelled.buyer@example.com"
+      },
+      "BillingAddress": {
+        "FullName": "Mock Buyer Cancelled",
+        "Company": "",
+        "Address1": "12 Elm St",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Phoenix",
+        "Region": "AZ",
+        "PostCode": "85001",
+        "Country": "United States",
+        "PhoneNumber": "555-020-0002",
+        "EmailAddress": "cancelled.buyer@example.com"
+      }
+    },
+    "TotalsInfo": {
+      "Subtotal": 39.99,
+      "Tax": 0.00,
+      "PostageCost": 0.00,
+      "TotalCharge": 0.00,
+      "Currency": "USD",
+      "PaymentMethod": "Credit Card"
+    },
+    "FulfilmentLocationId": "00000000-0000-0000-0000-000000000001",
+    "ProcessedDate": "2026-11-02T09:00:00Z",
+    "Items": [
+      {
+        "RowId": "44444444-0000-0000-0000-000000000202",
+        "SKU": "AJC-D5S",
+        "Title": "AJC Brand 12V 5Ah Sealed Lead Acid Battery",
+        "Quantity": 1,
+        "PricePerUnit": 39.99,
+        "LineDiscount": 0.00,
+        "TaxRate": 0.00,
+        "Tax": 0.00,
+        "CostIncTax": 0.00,
+        "StockItemId": "11111111-0000-0000-0000-000000000001"
+      }
+    ]
+  },
+  {
+    "OrderId": "33333333-0000-0000-0000-000000000203",
+    "NumOrderId": "100203",
+    "GeneralInfo": {
+      "Status": 2,
+      "HoldOrParked": false,
+      "Source": "SHOPIFY",
+      "SubSource": "BatteryClerk US",
+      "ReferenceNum": "SHPF-US-9703",
+      "ReceivedDate": "2026-11-01T12:00:00Z",
+      "DispatchByDate": "2026-11-02T18:00:00Z",
+      "FolderName": ["Dispatched"]
+    },
+    "ShippingInfo": {
+      "PostalServiceName": "FedEx Ground",
+      "Vendor": "FedEx",
+      "TrackingNumber": "794999999001",
+      "TotalCharge": 10.00
+    },
+    "CustomerInfo": {
+      "ChannelBuyerName": "Mock Buyer FullyRefunded",
+      "Address": {
+        "FullName": "Mock Buyer FullyRefunded",
+        "Company": "Solar Hub",
+        "Address1": "88 Sun Way",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Miami",
+        "Region": "FL",
+        "PostCode": "33101",
+        "Country": "United States",
+        "PhoneNumber": "555-020-0003",
+        "EmailAddress": "full.refund@example.com"
+      },
+      "BillingAddress": {
+        "FullName": "Mock Buyer FullyRefunded",
+        "Company": "Solar Hub",
+        "Address1": "88 Sun Way",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Miami",
+        "Region": "FL",
+        "PostCode": "33101",
+        "Country": "United States",
+        "PhoneNumber": "555-020-0003",
+        "EmailAddress": "full.refund@example.com"
+      }
+    },
+    "TotalsInfo": {
+      "Subtotal": 39.99,
+      "Tax": 2.80,
+      "PostageCost": 10.00,
+      "TotalCharge": 52.79,
+      "Currency": "USD",
+      "PaymentMethod": "PayPal"
+    },
+    "FulfilmentLocationId": "00000000-0000-0000-0000-000000000001",
+    "ProcessedDate": "2026-11-01T16:00:00Z",
+    "Items": [
+      {
+        "RowId": "44444444-0000-0000-0000-000000000203",
+        "SKU": "AJC-D5S",
+        "Title": "AJC Brand 12V 5Ah Sealed Lead Acid Battery",
+        "Quantity": 1,
+        "PricePerUnit": 39.99,
+        "LineDiscount": 0.00,
+        "TaxRate": 7.00,
+        "Tax": 2.80,
+        "CostIncTax": 52.79,
+        "StockItemId": "11111111-0000-0000-0000-000000000001"
+      }
+    ]
+  },
+  {
+    "OrderId": "33333333-0000-0000-0000-000000000204",
+    "NumOrderId": "100204",
+    "GeneralInfo": {
+      "Status": 2,
+      "HoldOrParked": false,
+      "Source": "SHOPIFY",
+      "SubSource": "BatteryClerk US",
+      "ReferenceNum": "SHPF-US-9704",
+      "ReceivedDate": "2026-11-01T14:00:00Z",
+      "DispatchByDate": "2026-11-02T18:00:00Z",
+      "FolderName": ["Dispatched"]
+    },
+    "ShippingInfo": {
+      "PostalServiceName": "FedEx Ground",
+      "Vendor": "FedEx",
+      "TrackingNumber": "794999999002",
+      "TotalCharge": 12.00
+    },
+    "CustomerInfo": {
+      "ChannelBuyerName": "Mock Buyer PartialRefund",
+      "Address": {
+        "FullName": "Mock Buyer PartialRefund",
+        "Company": "Battery Central",
+        "Address1": "450 Industrial Rd",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Chicago",
+        "Region": "IL",
+        "PostCode": "60601",
+        "Country": "United States",
+        "PhoneNumber": "555-020-0004",
+        "EmailAddress": "partial.refund@example.com"
+      },
+      "BillingAddress": {
+        "FullName": "Mock Buyer PartialRefund",
+        "Company": "Battery Central",
+        "Address1": "450 Industrial Rd",
+        "Address2": "",
+        "Address3": "",
+        "Town": "Chicago",
+        "Region": "IL",
+        "PostCode": "60601",
+        "Country": "United States",
+        "PhoneNumber": "555-020-0004",
+        "EmailAddress": "partial.refund@example.com"
+      }
+    },
+    "TotalsInfo": {
+      "Subtotal": 99.98,
+      "Tax": 8.00,
+      "PostageCost": 12.00,
+      "TotalCharge": 119.98,
+      "Currency": "USD",
+      "PaymentMethod": "Credit Card"
+    },
+    "FulfilmentLocationId": "00000000-0000-0000-0000-000000000001",
+    "ProcessedDate": "2026-11-01T17:00:00Z",
+    "Items": [
+      {
+        "RowId": "44444444-0000-0000-0000-000000000204",
+        "SKU": "AJC-D5S",
+        "Title": "AJC Brand 12V 5Ah Sealed Lead Acid Battery",
+        "Quantity": 1,
+        "PricePerUnit": 39.99,
+        "LineDiscount": 0.00,
+        "TaxRate": 8.00,
+        "Tax": 3.20,
+        "CostIncTax": 43.19,
+        "StockItemId": "11111111-0000-0000-0000-000000000001"
+      },
+      {
+        "RowId": "44444444-0000-0000-0000-000000000205",
+        "SKU": "AJC-D12S",
+        "Title": "AJC Brand 12V 12Ah Sealed Lead Acid Battery",
+        "Quantity": 1,
+        "PricePerUnit": 59.99,
+        "LineDiscount": 0.00,
+        "TaxRate": 8.00,
+        "Tax": 4.80,
+        "CostIncTax": 64.79,
+        "StockItemId": "11111111-0000-0000-0000-000000000002"
+      }
+    ]
+  }
+]

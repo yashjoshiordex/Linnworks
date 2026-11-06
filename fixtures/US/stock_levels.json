@@ -1,0 +1,38 @@
+[
+  {
+    "SKU": "AJC-D5S",
+    "StockItemId": "11111111-0000-0000-0000-000000000001",
+    "LocationId": "00000000-0000-0000-0000-000000000001",
+    "LocationName": "US | AJC Main",
+    "Level": 350,
+    "InOrderBook": 25,
+    "Available": 325
+  },
+  {
+    "SKU": "AJC-D5S",
+    "StockItemId": "11111111-0000-0000-0000-000000000001",
+    "LocationId": "00000000-0000-0000-0000-000000000002",
+    "LocationName": "US | West Coast 3PL",
+    "Level": 120,
+    "InOrderBook": 10,
+    "Available": 110
+  },
+  {
+    "SKU": "AJC-D12S",
+    "StockItemId": "11111111-0000-0000-0000-000000000002",
+    "LocationId": "00000000-0000-0000-0000-000000000001",
+    "LocationName": "US | AJC Main",
+    "Level": 80,
+    "InOrderBook": 5,
+    "Available": 75
+  },
+  {
+    "SKU": "UB1280-GEN",
+    "StockItemId": "11111111-0000-0000-0000-000000000003",
+    "LocationId": "00000000-0000-0000-0000-000000000001",
+    "LocationName": "US | AJC Main",
+    "Level": 45,
+    "InOrderBook": 0,
+    "Available": 45
+  }
+]

@@ -1,0 +1,37 @@
+[
+  {
+    "pkRowId": "f0000000-0000-0000-0000-000000000001",
+    "fkStockItemId": "22222222-0000-0000-0000-000000000001",
+    "ProperyName": "Brand",
+    "PropertyValue": "AJC Battery Canada",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "f0000000-0000-0000-0000-000000000002",
+    "fkStockItemId": "22222222-0000-0000-0000-000000000001",
+    "ProperyName": "Fill SKU",
+    "PropertyValue": "FILL-D5S-CA",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "f0000000-0000-0000-0000-000000000003",
+    "fkStockItemId": "22222222-0000-0000-0000-000000000001",
+    "ProperyName": "Product Line",
+    "PropertyValue": "Standard SLA",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "f0000000-0000-0000-0000-000000000004",
+    "fkStockItemId": "22222222-0000-0000-0000-000000000002",
+    "ProperyName": "Brand",
+    "PropertyValue": "AJC Polar Series",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "f0000000-0000-0000-0000-000000000005",
+    "fkStockItemId": "22222222-0000-0000-0000-000000000002",
+    "ProperyName": "MasterSKU",
+    "PropertyValue": "MSKU-CA-WINTER",
+    "PropertyType": "Attribute"
+  }
+]

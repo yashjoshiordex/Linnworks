@@ -1,0 +1,11 @@
+[
+  {
+    "RefundId": "REF-CA-001",
+    "OrderId": "55555555-0000-0000-0000-000000000201",
+    "SKU": "AJC-CA-ONLY",
+    "Quantity": 1,
+    "Amount": 15.00,
+    "Reason": "Price match partial courtesy rebate",
+    "RefundDate": "2026-11-04T09:00:00Z"
+  }
+]

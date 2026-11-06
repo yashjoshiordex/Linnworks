@@ -1,0 +1,14 @@
+[
+  {
+    "StockLocationId": "10000000-0000-0000-0000-000000000001",
+    "LocationName": "CA | AJC Ontario",
+    "IsDefault": true,
+    "IsFulfillmentCenter": true
+  },
+  {
+    "StockLocationId": "10000000-0000-0000-0000-000000000002",
+    "LocationName": "CA | Vancouver Hub",
+    "IsDefault": false,
+    "IsFulfillmentCenter": true
+  }
+]

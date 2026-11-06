@@ -1,0 +1,93 @@
+[
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000001",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000001",
+    "ProperyName": "Brand",
+    "PropertyValue": "AJC Battery",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000002",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000001",
+    "ProperyName": "Fill SKU",
+    "PropertyValue": "FILL-D5S-AJC",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000003",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000001",
+    "ProperyName": "Product Line",
+    "PropertyValue": "Standard SLA",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000004",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000001",
+    "ProperyName": "MasterSKU",
+    "PropertyValue": "MSKU-D5S",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000005",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000001",
+    "ProperyName": "Substitute 1",
+    "PropertyValue": "SUB-D5S-ALT1",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000006",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000001",
+    "ProperyName": "Substitute 2",
+    "PropertyValue": "SUB-D5S-ALT2",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000007",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000001",
+    "ProperyName": "Mfr Part Number",
+    "PropertyValue": "MPN-12050",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000008",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000001",
+    "ProperyName": "Product Tag",
+    "PropertyValue": "Bestseller",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000009",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000001",
+    "ProperyName": "CustomInternalCode",
+    "PropertyValue": "TEST-UNKNOWN-CODE-999",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000010",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000002",
+    "ProperyName": "Brand",
+    "PropertyValue": "AJC Battery",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000011",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000002",
+    "ProperyName": "Fill SKU",
+    "PropertyValue": "FILL-D12S-AJC",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000012",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000003",
+    "ProperyName": "Brand",
+    "PropertyValue": "Universal Power Group",
+    "PropertyType": "Attribute"
+  },
+  {
+    "pkRowId": "e0000000-0000-0000-0000-000000000013",
+    "fkStockItemId": "11111111-0000-0000-0000-000000000003",
+    "ProperyName": "Mfr Part Number",
+    "PropertyValue": "UPG-UB1280",
+    "PropertyType": "Attribute"
+  }
+]

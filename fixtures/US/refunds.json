@@ -1,0 +1,29 @@
+[
+  {
+    "RefundId": "REF-US-001",
+    "OrderId": "33333333-0000-0000-0000-000000000203",
+    "SKU": "AJC-D5S",
+    "Quantity": 1,
+    "Amount": 52.79,
+    "Reason": "Customer return - defective terminal",
+    "RefundDate": "2026-11-03T10:15:00Z"
+  },
+  {
+    "RefundId": "REF-US-002",
+    "OrderId": "33333333-0000-0000-0000-000000000204",
+    "SKU": "AJC-D5S",
+    "Quantity": 1,
+    "Amount": 43.19,
+    "Reason": "Customer returned 1 of 2 batteries",
+    "RefundDate": "2026-11-03T14:30:00Z"
+  },
+  {
+    "RefundId": "REF-US-003",
+    "OrderId": "33333333-0000-0000-0000-000000000201",
+    "SKU": null,
+    "Quantity": null,
+    "Amount": 5.00,
+    "Reason": "Goodwill shipping courtesy credit",
+    "RefundDate": "2026-11-04T16:00:00Z"
+  }
+]

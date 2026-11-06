@@ -1,0 +1,74 @@
+[
+  {
+    "OrderId": "55555555-0000-0000-0000-000000000101",
+    "NumOrderId": "200101",
+    "GeneralInfo": {
+      "Status": 1,
+      "HoldOrParked": false,
+      "Source": "SHOPIFY",
+      "SubSource": "BatteryClerk CA",
+      "ReferenceNum": "SHPF-CA-3001",
+      "ReceivedDate": "2026-11-04T12:00:00Z",
+      "DispatchByDate": "2026-11-06T18:00:00Z",
+      "FolderName": ["Default"]
+    },
+    "ShippingInfo": {
+      "PostalServiceName": "Canada Post Expedited",
+      "Vendor": "Canada Post",
+      "TrackingNumber": "",
+      "TotalCharge": 12.50
+    },
+    "CustomerInfo": {
+      "ChannelBuyerName": "Mock Buyer Toronto",
+      "Address": {
+        "FullName": "Mock Buyer Toronto",
+        "Company": "Ontario Power Co",
+        "Address1": "700 Bay Street",
+        "Address2": "Floor 12",
+        "Address3": "",
+        "Town": "Toronto",
+        "Region": "ON",
+        "PostCode": "M5G 1Z6",
+        "Country": "Canada",
+        "PhoneNumber": "416-555-0199",
+        "EmailAddress": "mock.toronto@example.ca"
+      },
+      "BillingAddress": {
+        "FullName": "Mock Buyer Toronto",
+        "Company": "Ontario Power Co",
+        "Address1": "700 Bay Street",
+        "Address2": "Floor 12",
+        "Address3": "",
+        "Town": "Toronto",
+        "Region": "ON",
+        "PostCode": "M5G 1Z6",
+        "Country": "Canada",
+        "PhoneNumber": "416-555-0199",
+        "EmailAddress": "mock.toronto@example.ca"
+      }
+    },
+    "TotalsInfo": {
+      "Subtotal": 49.99,
+      "Tax": 6.50,
+      "PostageCost": 12.50,
+      "TotalCharge": 68.99,
+      "Currency": "CAD",
+      "PaymentMethod": "Credit Card"
+    },
+    "FulfilmentLocationId": "10000000-0000-0000-0000-000000000001",
+    "Items": [
+      {
+        "RowId": "66666666-0000-0000-0000-000000000101",
+        "SKU": "AJC-D5S",
+        "Title": "AJC Brand 12V 5Ah Sealed Lead Acid Battery (CA)",
+        "Quantity": 1,
+        "PricePerUnit": 49.99,
+        "LineDiscount": 0.00,
+        "TaxRate": 13.00,
+        "Tax": 6.50,
+        "CostIncTax": 56.49,
+        "StockItemId": "22222222-0000-0000-0000-000000000001"
+      }
+    ]
+  }
+]

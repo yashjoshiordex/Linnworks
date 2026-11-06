@@ -1,0 +1,24 @@
+[
+  {
+    "StockItemId": "22222222-0000-0000-0000-000000000001",
+    "ItemNumber": "AJC-D5S",
+    "ItemTitle": "AJC Brand 12V 5Ah Sealed Lead Acid Battery (CA)",
+    "PurchasePrice": 24.0000,
+    "RetailPrice": 49.99,
+    "CategoryName": "SLA Batteries",
+    "BarcodeNumber": "850012345001",
+    "Weight": 1.650,
+    "CreationDate": "2024-01-20T10:00:00Z"
+  },
+  {
+    "StockItemId": "22222222-0000-0000-0000-000000000002",
+    "ItemNumber": "AJC-CA-ONLY",
+    "ItemTitle": "AJC Canadian Winter Spec 12V Battery",
+    "PurchasePrice": 32.5000,
+    "RetailPrice": 69.99,
+    "CategoryName": "Cold Weather SLA",
+    "BarcodeNumber": "850012345099",
+    "Weight": 4.100,
+    "CreationDate": "2024-02-15T12:00:00Z"
+  }
+]
