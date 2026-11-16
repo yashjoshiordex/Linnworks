@@ -131,7 +131,8 @@ def sync_refunds(
         return len(refund_records)
 
     except Exception as e:
-        record_sync_error(region_key, "refunds", str(e))
+        if not dry_run:
+            record_sync_error(region_key, "refunds", str(e))
         logger.error(f"[{region_key}] Refunds sync failed: {e}")
         raise
 

@@ -34,7 +34,7 @@ def _extract_order_and_items(
     addr_info = cust_info.get("Address") or raw_order.get("ShippingAddress") or {}
     bill_info = cust_info.get("BillingAddress") or addr_info
     ship_info = raw_order.get("ShippingInfo") or {}
-    totals = raw_order.get("Totals") or {}
+    totals = raw_order.get("TotalsInfo") or raw_order.get("Totals") or {}
 
     channel_ref = (
         gen_info.get("ReferenceNum")
@@ -49,10 +49,13 @@ def _extract_order_and_items(
     raw_status = gen_info.get("Status") if "Status" in gen_info else raw_order.get("Status")
     is_parked = bool(gen_info.get("IsParked", False) or gen_info.get("HoldOrWait", False))
 
-    if default_status == "open":
+    effective_status = raw_order.get("_sync_status") or default_status
+    if effective_status in ("shipped", "processed") or raw_order.get("Processed") is True:
+        status = "shipped"
+    elif effective_status == "open":
         status = "parked" if is_parked else "open"
     else:
-        status = default_status
+        status = effective_status
 
     # Folders
     folder_list = raw_order.get("FolderName") or raw_order.get("Folders") or []
@@ -60,13 +63,16 @@ def _extract_order_and_items(
 
     # Dates
     date_received = parse_utc_datetime(
-        gen_info.get("ReceivedDate") or raw_order.get("ReceivedDate")
+        gen_info.get("ReceivedDate") or raw_order.get("ReceivedDate") or raw_order.get("dReceivedDate")
     )
     date_dispatch_by = parse_utc_datetime(
-        gen_info.get("DespatchByDate") or raw_order.get("DespatchByDate")
+        gen_info.get("DespatchByDate") or raw_order.get("DespatchByDate") or raw_order.get("dDispatchByDate")
     )
     date_processed = parse_utc_datetime(
-        raw_order.get("ProcessedDate") or gen_info.get("ProcessedDate")
+        raw_order.get("ProcessedOn")
+        or raw_order.get("ProcessedDate")
+        or gen_info.get("ProcessedDate")
+        or raw_order.get("dProcessedOn")
     )
 
     # Customer
@@ -74,11 +80,13 @@ def _extract_order_and_items(
         gen_info.get("Name")
         or addr_info.get("FullName")
         or raw_order.get("CustomerName")
+        or raw_order.get("cFullName")
     )
     customer_email = (
         gen_info.get("Email")
         or cust_info.get("EmailAddress")
         or raw_order.get("Email")
+        or raw_order.get("cEmailAddress")
     )
     customer_phone = (
         addr_info.get("PhoneNumber")
@@ -89,13 +97,13 @@ def _extract_order_and_items(
     # Shipping Address
     ship_name = addr_info.get("FullName") or customer_name
     ship_company = addr_info.get("Company")
-    ship_a1 = addr_info.get("Address1")
-    ship_a2 = addr_info.get("Address2")
-    ship_a3 = addr_info.get("Address3")
-    ship_town = addr_info.get("Town")
-    ship_region = addr_info.get("Region")
-    ship_postcode = addr_info.get("PostCode")
-    ship_country = addr_info.get("Country")
+    ship_a1 = addr_info.get("Address1") or raw_order.get("Address1")
+    ship_a2 = addr_info.get("Address2") or raw_order.get("Address2")
+    ship_a3 = addr_info.get("Address3") or raw_order.get("Address3")
+    ship_town = addr_info.get("Town") or raw_order.get("Town")
+    ship_region = addr_info.get("Region") or raw_order.get("Region")
+    ship_postcode = addr_info.get("PostCode") or raw_order.get("cPostCode")
+    ship_country = addr_info.get("Country") or raw_order.get("Country")
 
     # Billing Address
     bill_name = bill_info.get("FullName") or ship_name
@@ -111,11 +119,18 @@ def _extract_order_and_items(
     # Financials
     currency = gen_info.get("Currency") or raw_order.get("Currency", "USD")
     subtotal = Decimal(str(totals.get("SubTotal", raw_order.get("Subtotal", "0.0000"))))
-    tax = Decimal(str(totals.get("Tax", raw_order.get("Tax", "0.0000"))))
+    tax = Decimal(str(totals.get("Tax", raw_order.get("Tax", raw_order.get("fTax", "0.0000")))))
     shipping_charge = Decimal(
-        str(totals.get("Postage", ship_info.get("Cost", raw_order.get("ShippingCost", "0.0000"))))
+        str(totals.get("Postage", ship_info.get("Cost", raw_order.get("ShippingCost", raw_order.get("fPostageCost", "0.0000")))))
     )
-    total = Decimal(str(totals.get("Total", raw_order.get("Total", "0.0000"))))
+    total = Decimal(
+        str(
+            totals.get("TotalCharge")
+            or totals.get("Total")
+            or raw_order.get("Total")
+            or raw_order.get("fTotalCharge", "0.0000")
+        )
+    )
     payment_method = raw_order.get("PaymentMethod") or gen_info.get("PaymentMethod")
 
     # Shipping details
@@ -222,16 +237,16 @@ def _extract_order_and_items(
 
 SQL_UPSERT_ORDER = """
     INSERT INTO lw_orders (
-        region, order_id, order_number, channel_reference_number,
-        channel_source, channel_subsource, status, raw_status, is_parked, folders,
-        date_received, date_dispatch_by, date_processed,
+        region, order_id, num_order_id, channel_reference_number,
+        source, subsource, status, raw_status, is_hold_or_parked, folder_names,
+        received_date, dispatch_by_date, processed_date,
         customer_name, customer_email, customer_phone,
         shipping_name, shipping_company, shipping_address1, shipping_address2, shipping_address3,
         shipping_town, shipping_region, shipping_postcode, shipping_country,
         billing_name, billing_company, billing_address1, billing_address2, billing_address3,
         billing_town, billing_region, billing_postcode, billing_country,
         currency, subtotal, tax, shipping_charge, total, payment_method,
-        shipping_service, shipping_carrier, tracking_number, fulfillment_location_id
+        shipping_service, shipping_carrier, tracking_number, location_id
     ) VALUES (
         %s, %s, %s, %s,
         %s, %s, %s, %s, %s, %s,
@@ -245,17 +260,17 @@ SQL_UPSERT_ORDER = """
         %s, %s, %s, %s
     )
     ON DUPLICATE KEY UPDATE
-        order_number = COALESCE(VALUES(order_number), order_number),
+        num_order_id = COALESCE(VALUES(num_order_id), num_order_id),
         channel_reference_number = COALESCE(VALUES(channel_reference_number), channel_reference_number),
-        channel_source = COALESCE(VALUES(channel_source), channel_source),
-        channel_subsource = COALESCE(VALUES(channel_subsource), channel_subsource),
+        source = COALESCE(VALUES(source), source),
+        subsource = COALESCE(VALUES(subsource), subsource),
         status = VALUES(status),
         raw_status = VALUES(raw_status),
-        is_parked = VALUES(is_parked),
-        folders = VALUES(folders),
-        date_received = COALESCE(VALUES(date_received), date_received),
-        date_dispatch_by = COALESCE(VALUES(date_dispatch_by), date_dispatch_by),
-        date_processed = COALESCE(VALUES(date_processed), date_processed),
+        is_hold_or_parked = VALUES(is_hold_or_parked),
+        folder_names = VALUES(folder_names),
+        received_date = COALESCE(VALUES(received_date), received_date),
+        dispatch_by_date = COALESCE(VALUES(dispatch_by_date), dispatch_by_date),
+        processed_date = COALESCE(VALUES(processed_date), processed_date),
         customer_name = COALESCE(VALUES(customer_name), customer_name),
         customer_email = COALESCE(VALUES(customer_email), customer_email),
         customer_phone = COALESCE(VALUES(customer_phone), customer_phone),
@@ -286,7 +301,7 @@ SQL_UPSERT_ORDER = """
         shipping_service = COALESCE(VALUES(shipping_service), shipping_service),
         shipping_carrier = COALESCE(VALUES(shipping_carrier), shipping_carrier),
         tracking_number = COALESCE(VALUES(tracking_number), tracking_number),
-        fulfillment_location_id = COALESCE(VALUES(fulfillment_location_id), fulfillment_location_id),
+        location_id = COALESCE(VALUES(location_id), location_id),
         updated_at = CURRENT_TIMESTAMP;
 """
 
@@ -349,28 +364,34 @@ def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False
         return len(orders_batch)
 
     except Exception as e:
-        record_sync_error(region_key, "orders", str(e))
+        if not dry_run:
+            record_sync_error(region_key, "orders", str(e))
         logger.error(f"[{region_key}] Open orders sync failed: {e}")
         raise
 
 
-def sync_orders_delta(client: LinnworksClient, region: str, dry_run: bool = False) -> int:
-    """Delta synchronization for processed/shipped/cancelled orders with 10-minute lookback window."""
+def sync_orders_delta(
+    client: LinnworksClient, region: str, dry_run: bool = False, lookback_days: Optional[int] = None
+) -> int:
+    """Delta synchronization for processed/shipped/cancelled orders with configurable lookback window."""
     region_key = region.upper()
     now_utc = datetime.now(timezone.utc)
     overlap_minutes = Config.ORDER_DELTA_OVERLAP_MINUTES
 
-    # Load cursor from database
-    cursor_val = get_sync_cursor(region_key, "orders")
-    if cursor_val:
-        try:
-            last_dt = datetime.fromisoformat(cursor_val.replace("Z", "+00:00"))
-            from_dt = last_dt - timedelta(minutes=overlap_minutes)
-        except Exception:
-            from_dt = now_utc - timedelta(days=1)
+    if lookback_days is not None and lookback_days > 0:
+        from_dt = now_utc - timedelta(days=lookback_days)
     else:
-        # Default lookback if initial run: 7 days
-        from_dt = now_utc - timedelta(days=7)
+        # Load cursor from database
+        cursor_val = get_sync_cursor(region_key, "orders")
+        if cursor_val:
+            try:
+                last_dt = datetime.fromisoformat(cursor_val.replace("Z", "+00:00"))
+                from_dt = last_dt - timedelta(minutes=overlap_minutes)
+            except Exception:
+                from_dt = now_utc - timedelta(days=1)
+        else:
+            # Default lookback if initial run: 7 days
+            from_dt = now_utc - timedelta(days=7)
 
     from_str = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     to_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -414,7 +435,8 @@ def sync_orders_delta(client: LinnworksClient, region: str, dry_run: bool = Fals
         return total_orders
 
     except Exception as e:
-        record_sync_error(region_key, "orders", str(e))
+        if not dry_run:
+            record_sync_error(region_key, "orders", str(e))
         logger.error(f"[{region_key}] Orders delta sync failed: {e}")
         raise
 

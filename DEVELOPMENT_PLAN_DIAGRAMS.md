@@ -212,8 +212,8 @@ flowchart TD
 | **2** | **API Client & Fixtures** | **COMPLETED** | `base.py`, `live.py`, `fixture.py`, `auth.py`, test mock JSONs | 10/10 pytest passing with 401 retry, 429 backoff & RPS throttling. |
 | **3** | **Catalog & Stock Sync** | **COMPLETED** | `lwsync/sync/products.py`, `lwsync/sync/inventory.py`, bulk upsert engine | Products, 8 extended properties, locations, and stock upsert into DB without duplicates. |
 | **4** | **Orders, Refunds & CLI** | **COMPLETED** | `lwsync/sync/orders.py`, `lwsync/sync/refunds.py`, CLI commands | Delta sync with 10-min overlap window, auto-marking `refunded` orders, `--dry-run` flag. |
-| **5** | **Idempotency & Verification** | **IN PROGRESS** | `tests/test_idempotency.py`, `tests/test_status_mapping.py` | Double sync execution gives identical table row counts; partial vs full refund tested. |
-| **6** | **Docs & Crontab Deploy** | **PENDING** | `README.md`, crontab definitions, Live API transition guide | Client can transition from local fixture mode to live AWS RDS/MariaDB by changing config only. |
+| **5** | **Idempotency & Verification** | **COMPLETED** | `tests/test_idempotency.py` | Double sync execution, status machine transitions, and partial/full refund edge cases verified. |
+| **6** | **Docs & Crontab Deploy** | **COMPLETED** | `README.md`, crontab definitions, Live API transition guide | Client can transition from local fixture mode to live AWS RDS/MariaDB by changing config only. |
 
 ---
 

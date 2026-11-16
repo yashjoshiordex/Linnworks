@@ -19,6 +19,22 @@ class LinnworksClient(ABC):
         """Retrieve catalog product items with paging."""
         pass
 
+    def get_all_products(
+        self, region: str, page_size: int = 200
+    ) -> list[dict[str, Any]]:
+        """Fetch ALL products across all pages. Subclasses may override for efficiency."""
+        all_products: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            batch = self.get_products(region, page=page, page_size=page_size)
+            if not batch:
+                break
+            all_products.extend(batch)
+            if len(batch) < page_size:
+                break
+            page += 1
+        return all_products
+
     @abstractmethod
     def get_product_extended_properties(
         self, region: str, stock_item_ids: Optional[list[str]] = None

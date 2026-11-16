@@ -38,26 +38,23 @@ def sync_products(client: LinnworksClient, region: str, dry_run: bool = False) -
     logger.info(f"[{region_key}] Starting products sync...")
 
     try:
-        # Step 1: Ingest stock items page-by-page or batch
-        if hasattr(client, "get_products"):
-            raw_products = client.get_products(region_key, page=1, page_size=200)
-        else:
-            raw_products = client.get_stock_items(region_key, page_number=1, page_size=200)
+        # Step 1: Ingest stock items across ALL pages
+        raw_products = client.get_all_products(region_key, page_size=200)
 
         if not raw_products:
             logger.info(f"[{region_key}] No products returned from client.")
             return 0
 
-        logger.info(f"[{region_key}] Fetched {len(raw_products)} products.")
+        logger.info(f"[{region_key}] Fetched {len(raw_products)} total products (all pages).")
 
-        # Step 2: Build property lookup map per StockItemId (if client exposes extended properties)
-        # Some endpoints return extended properties attached to items, others via separate call
+        # Step 2: Build property lookup map per StockItemId
         properties_by_item_id: Dict[str, Dict[str, str]] = {}
-        if hasattr(client, "_load_fixture"):
-            # If in fixture mode, read mock extended properties
-            mock_props = client._load_fixture(region_key, "extended_properties")
-            for prop in mock_props:
-                item_id = prop.get("StockItemId")
+        ext_props_loaded = False
+        try:
+            extended_props = client.get_product_extended_properties(region_key)
+            ext_props_loaded = True
+            for prop in extended_props:
+                item_id = prop.get("StockItemId") or prop.get("fkStockItemId")
                 prop_name = (prop.get("ProperyName") or prop.get("PropertyName", "")).strip().lower()
                 prop_val = prop.get("PropertyValue", "")
                 if item_id:
@@ -70,38 +67,75 @@ def sync_products(client: LinnworksClient, region: str, dry_run: bool = False) -
                         logger.warning(
                             f"[{region_key}] Unmapped extended property '{prop_name}' on item {item_id}. Ignored."
                         )
+        except Exception as e:
+            logger.warning(f"[{region_key}] Could not fetch extended properties: {e}. "
+                           "Extended property columns will NOT be overwritten for existing rows.")
 
         # Step 3: Prepare records for bulk upsert
-        sql = """
-            INSERT INTO lw_products (
-                region, stock_item_id, sku, title, cost, retail_price,
-                category, barcode, weight,
-                brand, fill_sku, product_line, master_sku,
-                substitute_1, substitute_2, mfr_part_number, product_tag
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s,
-                %s, %s, %s,
-                %s, %s, %s, %s,
-                %s, %s, %s, %s
-            )
-            ON DUPLICATE KEY UPDATE
-                stock_item_id = VALUES(stock_item_id),
-                title = VALUES(title),
-                cost = VALUES(cost),
-                retail_price = VALUES(retail_price),
-                category = VALUES(category),
-                barcode = VALUES(barcode),
-                weight = VALUES(weight),
-                brand = VALUES(brand),
-                fill_sku = VALUES(fill_sku),
-                product_line = VALUES(product_line),
-                master_sku = VALUES(master_sku),
-                substitute_1 = VALUES(substitute_1),
-                substitute_2 = VALUES(substitute_2),
-                mfr_part_number = VALUES(mfr_part_number),
-                product_tag = VALUES(product_tag),
-                updated_at = CURRENT_TIMESTAMP;
-        """
+        # When extended properties failed to load, use COALESCE to protect existing values
+        if ext_props_loaded:
+            sql = """
+                INSERT INTO lw_products (
+                    region, stock_item_id, sku, title, cost, retail_price,
+                    category, barcode, weight,
+                    brand, fill_sku, product_line, master_sku,
+                    substitute_1, substitute_2, mfr_part_number, product_tag
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                ON DUPLICATE KEY UPDATE
+                    stock_item_id = VALUES(stock_item_id),
+                    title = VALUES(title),
+                    cost = VALUES(cost),
+                    retail_price = VALUES(retail_price),
+                    category = VALUES(category),
+                    barcode = VALUES(barcode),
+                    weight = VALUES(weight),
+                    brand = VALUES(brand),
+                    fill_sku = VALUES(fill_sku),
+                    product_line = VALUES(product_line),
+                    master_sku = VALUES(master_sku),
+                    substitute_1 = VALUES(substitute_1),
+                    substitute_2 = VALUES(substitute_2),
+                    mfr_part_number = VALUES(mfr_part_number),
+                    product_tag = VALUES(product_tag),
+                    updated_at = CURRENT_TIMESTAMP;
+            """
+        else:
+            # Extended properties fetch failed — use COALESCE to preserve existing values
+            sql = """
+                INSERT INTO lw_products (
+                    region, stock_item_id, sku, title, cost, retail_price,
+                    category, barcode, weight,
+                    brand, fill_sku, product_line, master_sku,
+                    substitute_1, substitute_2, mfr_part_number, product_tag
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                ON DUPLICATE KEY UPDATE
+                    stock_item_id = VALUES(stock_item_id),
+                    title = VALUES(title),
+                    cost = VALUES(cost),
+                    retail_price = VALUES(retail_price),
+                    category = VALUES(category),
+                    barcode = VALUES(barcode),
+                    weight = VALUES(weight),
+                    brand = COALESCE(VALUES(brand), brand),
+                    fill_sku = COALESCE(VALUES(fill_sku), fill_sku),
+                    product_line = COALESCE(VALUES(product_line), product_line),
+                    master_sku = COALESCE(VALUES(master_sku), master_sku),
+                    substitute_1 = COALESCE(VALUES(substitute_1), substitute_1),
+                    substitute_2 = COALESCE(VALUES(substitute_2), substitute_2),
+                    mfr_part_number = COALESCE(VALUES(mfr_part_number), mfr_part_number),
+                    product_tag = COALESCE(VALUES(product_tag), product_tag),
+                    updated_at = CURRENT_TIMESTAMP;
+            """
 
         records = []
         for p in raw_products:

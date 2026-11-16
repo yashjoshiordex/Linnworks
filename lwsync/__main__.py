@@ -54,7 +54,9 @@ def test_live_connection() -> None:
         sys.exit(1)
 
 
-def execute_sync(entity: str, region: str, dry_run: bool = False) -> None:
+def execute_sync(
+    entity: str, region: str, dry_run: bool = False, lookback_days: int = None
+) -> None:
     """Execute sync jobs for products, locations, stock, orders, refunds, or all."""
     client = get_client()
     regions = ["US", "CA"] if region.upper() == "ALL" else [region.upper()]
@@ -73,7 +75,7 @@ def execute_sync(entity: str, region: str, dry_run: bool = False) -> None:
             sync_products(client, reg, dry_run=dry_run)
 
         if entity_lower in ["orders", "all"]:
-            sync_orders_delta(client, reg, dry_run=dry_run)
+            sync_orders_delta(client, reg, dry_run=dry_run, lookback_days=lookback_days)
 
     logger.info(f"=== Sync Completed Successfully for Entity: {entity_lower} ===")
 
@@ -100,6 +102,12 @@ def main() -> None:
         choices=["US", "CA", "ALL"],
         default="ALL",
         help="Region to sync (default: ALL)",
+    )
+    run_parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Lookback window in days for orders sync (overrides saved cursor)",
     )
     run_parser.add_argument(
         "--dry-run",
@@ -138,7 +146,7 @@ def main() -> None:
 
     if args.command == "run":
         try:
-            execute_sync(args.entity, args.region, dry_run=args.dry_run)
+            execute_sync(args.entity, args.region, dry_run=args.dry_run, lookback_days=getattr(args, "days", None))
         except Exception as e:
             logger.error(f"Sync execution failed: {e}")
             sys.exit(1)

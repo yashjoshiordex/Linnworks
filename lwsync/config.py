@@ -53,6 +53,11 @@ class Config:
     }
 
     # API Configuration
+    # Account hosting is independent of the business region. Set these explicitly.
+    LW_API_BASE_URLS: dict[str, str] = {
+        "US": os.getenv("LW_US_API_BASE_URL", ""),
+        "CA": os.getenv("LW_CA_API_BASE_URL", ""),
+    }
     AUTH_URL: str = "https://api.linnworks.net/api/Auth/AuthorizeByApplication"
     REQUEST_TIMEOUT: int = int(os.getenv("LW_REQUEST_TIMEOUT", "30"))
     MAX_RETRIES: int = int(os.getenv("LW_MAX_RETRIES", "3"))
@@ -60,6 +65,9 @@ class Config:
 
     # Rate limiting (requests per second per region)
     RATE_LIMIT_RPS: float = float(os.getenv("LW_RATE_LIMIT_RPS", "2.0"))
+    # Conservative v2 order pacing; this is not a claimed vendor quota.
+    ORDERS_RATE_LIMIT_RPS: float = float(os.getenv("LW_ORDERS_RATE_LIMIT_RPS", "0.5"))
+    RATE_LIMIT_COOLDOWN: float = float(os.getenv("LW_RATE_LIMIT_COOLDOWN", "60"))
 
     # Sync Configuration
     ORDER_DELTA_OVERLAP_MINUTES: int = int(os.getenv("LW_ORDER_DELTA_OVERLAP_MINUTES", "10"))

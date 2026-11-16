@@ -77,11 +77,24 @@ flowchart TD
 
 ---
 
-### 4. Resilient HTTP Communication
-- **Rule**: API interactions must respect rate limits and automatically recover from temporary outages.
-- **Implementation**:
-  - **Token Bucket Rate Limiting**: Enforces a strict threshold (`LW_RATE_LIMIT_RPS=2.0`, or 120 calls/minute) to stay safely below Linnworks' 150 calls/minute limit.
-  - **Exponential Backoff**: Caught HTTP `429 (Too Many Requests)` and `5xx (Server Error)` responses automatically retry with exponential delays (`sleep = backoff * (2 ^ (attempt - 1))`) up to `MAX_RETRIES`.
+### 4. Resilient HTTP Communication & Rate Limiting
+- **Rule**: API interactions must respect vendor rate limits and automatically recover from temporary network or rate-limiting outages.
+- **Vendor Ceiling vs. Client Throttling**:
+  - **Linnworks Vendor Quota**: Linnworks enforces a ceiling of **150 calls per minute** (~2.5 req/sec) per installation token.
+  - **Client-Side Throttling**: Our client enforces preemptive pacing to stay comfortably below the vendor limit without hitting HTTP 429 errors.
+- **Rate Limit & Resilience Settings (Configurable in `.env`)**:
+
+| Parameter | Default | Equivalent Pace | Description |
+| :--- | :---: | :---: | :--- |
+| **`LW_RATE_LIMIT_RPS`** | **`2.0`** | 120 calls/min (1 req every 0.5s) | Used for standard endpoints (locations, products, stock levels). Safely stays 20% below Linnworks' 150 calls/min ceiling. |
+| **`LW_ORDERS_RATE_LIMIT_RPS`** | **`0.5`** | 30 calls/min (1 req every 2.0s) | Conservative pacing for `/v2/orders` to safely stream large pages (200 full orders with line items, addresses, and financials). |
+| **`LW_RATE_LIMIT_COOLDOWN`** | **`60s`** | 60 seconds | Fallback sleep window if Linnworks returns HTTP 429 without a `Retry-After` header. |
+| **`LW_MAX_RETRIES`** | **`3`** | 3 attempts | Maximum automatic retries on rate limits (429) or server errors (5xx). |
+| **`LW_RETRY_BACKOFF`** | **`1.5`** | Exponential | Base multiplier ($1.5 \times 2^{\text{attempt}-1}$) for backoff sleep. |
+
+- **Key Architectural Safeguards**:
+  - **Independent Per-Region Monotonic Pacing**: Pacing is tracked separately for `US` and `CA` using Python's monotonic clock (`time.monotonic()`). Requests to US never throttle or delay CA requests.
+  - **Dynamic `Retry-After` Header Parsing**: If Linnworks returns HTTP 429, the client parses the server's `Retry-After` header (seconds or RFC 7231 date) and sleeps for the exact time requested before retrying.
   - **Self-Healing Auth (401 Handling)**: If a Linnworks session token expires mid-sync, the client invalidates the in-memory token, calls `AuthorizeByApplication` to generate a fresh token, and transparently retries the request without failing the job.
 
 ---
