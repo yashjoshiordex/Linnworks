@@ -201,7 +201,7 @@ class LiveClient(LinnworksClient):
             "loadVariationParents": True,
             "entriesPerPage": min(page_size, 200),
             "pageNumber": page,
-            "dataRequirements": ["StockLevels", "Pricing", "Supplier"],
+            "dataRequirements": ["StockLevels", "Pricing", "Supplier", "ExtendedProperties"],
         }
         res = self._request(region, "POST", "/api/Stock/GetStockItemsFull", json_body=payload)
         if isinstance(res, dict) and "Data" in res:
@@ -352,12 +352,23 @@ class LiveClient(LinnworksClient):
                 f"{len(result['ProcessedOrders'] or [])} processed; "
                 f"more_pages={result['NextSearchToken'] is not None}"
             )
-            for key, status in (("OpenOrders", "open"), ("ProcessedOrders", "shipped")):
+            for key, default_status in (("OpenOrders", "open"), ("ProcessedOrders", "shipped")):
                 if key == "ProcessedOrders" and not include_processed:
                     continue
-                orders.extend(
-                    {**order, "_sync_status": status} for order in (result[key] or [])
-                )
+                for order in (result[key] or []):
+                    gen_info = order.get("GeneralInfo") or {}
+                    raw_st = gen_info.get("Status") if "Status" in gen_info else order.get("Status")
+                    is_canc = (
+                        raw_st in (3, "3", "CANCELLED", "Cancelled", "cancelled")
+                        or order.get("IsCancelled") is True
+                        or order.get("Cancelled") is True
+                        or gen_info.get("IsCancelled") is True
+                        or gen_info.get("Cancelled") is True
+                        or (isinstance(order.get("FolderName"), list) and any("cancel" in str(f).lower() for f in order.get("FolderName")))
+                        or (isinstance(gen_info.get("FolderName"), list) and any("cancel" in str(f).lower() for f in gen_info.get("FolderName")))
+                    )
+                    status = "cancelled" if is_canc else default_status
+                    orders.append({**order, "_sync_status": status})
             next_token = result["NextSearchToken"]
             if next_token is None:
                 return orders
@@ -398,25 +409,42 @@ class LiveClient(LinnworksClient):
         return orders[0] if orders else None
 
     def get_refunds(
-        self, region: str, from_date: str, to_date: str
+        self, region: str, from_date: str, to_date: str, page_size: int = 100
     ) -> list[dict[str, Any]]:
-        """POST /api/ReturnsRefunds/SearchReturnsRefundsPaged"""
-        payload = {
-            "from": from_date,
-            "to": to_date,
-            "dateType": "PROCESSED",
-            "searchField": "",
-            "exactMatch": False,
-            "searchTerm": "",
-            "pageNum": 1,
-            "numEntriesPerPage": 100,
-            "historyType": "REFUNDS",
-        }
-        res = self._request(
-            region, "POST", "/api/ReturnsRefunds/SearchReturnsRefundsPaged", json_body=payload
-        )
-        if isinstance(res, dict) and isinstance(res.get("Data"), list):
-            return res["Data"]
-        if isinstance(res, list):
-            return res
-        raise ValueError("Invalid refunds response; refusing to mark sync successful")
+        """POST /api/ReturnsRefunds/SearchReturnsRefundsPaged across all pages."""
+        all_refunds: list[dict[str, Any]] = []
+        page_num = 1
+        page_size = min(page_size, 100)
+
+        while True:
+            payload = {
+                "from": from_date,
+                "to": to_date,
+                "dateType": "PROCESSED",
+                "searchField": "",
+                "exactMatch": False,
+                "searchTerm": "",
+                "pageNum": page_num,
+                "numEntriesPerPage": page_size,
+                "historyType": "REFUNDS",
+            }
+            res = self._request(
+                region, "POST", "/api/ReturnsRefunds/SearchReturnsRefundsPaged", json_body=payload
+            )
+            if isinstance(res, dict) and isinstance(res.get("Data"), list):
+                items = res["Data"]
+            elif isinstance(res, list):
+                items = res
+            else:
+                raise ValueError("Invalid refunds response; refusing to mark sync successful")
+
+            all_refunds.extend(items)
+            logger.info(
+                f"[{region.upper()}] Refunds page {page_num}: fetched {len(items)} items (total: {len(all_refunds)})"
+            )
+
+            if len(items) < page_size:
+                break
+            page_num += 1
+
+        return all_refunds

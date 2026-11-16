@@ -47,10 +47,23 @@ def _extract_order_and_items(
 
     # Status Mapping
     raw_status = gen_info.get("Status") if "Status" in gen_info else raw_order.get("Status")
-    is_parked = bool(gen_info.get("IsParked", False) or gen_info.get("HoldOrWait", False))
+    is_parked = bool(gen_info.get("IsParked", False) or gen_info.get("HoldOrParked", False) or gen_info.get("HoldOrWait", False))
 
     effective_status = raw_order.get("_sync_status") or default_status
-    if effective_status in ("shipped", "processed") or raw_order.get("Processed") is True:
+    is_cancelled = (
+        raw_status in (3, "3", "CANCELLED", "Cancelled", "cancelled")
+        or effective_status == "cancelled"
+        or raw_order.get("IsCancelled") is True
+        or raw_order.get("Cancelled") is True
+        or gen_info.get("IsCancelled") is True
+        or gen_info.get("Cancelled") is True
+        or (isinstance(raw_order.get("FolderName"), list) and any("cancel" in str(f).lower() for f in raw_order.get("FolderName")))
+        or (isinstance(gen_info.get("FolderName"), list) and any("cancel" in str(f).lower() for f in gen_info.get("FolderName")))
+    )
+
+    if is_cancelled:
+        status = "cancelled"
+    elif effective_status in ("shipped", "processed") or raw_order.get("Processed") is True:
         status = "shipped"
     elif effective_status == "open":
         status = "parked" if is_parked else "open"
@@ -83,8 +96,9 @@ def _extract_order_and_items(
         or raw_order.get("cFullName")
     )
     customer_email = (
-        gen_info.get("Email")
+        addr_info.get("EmailAddress")
         or cust_info.get("EmailAddress")
+        or gen_info.get("Email")
         or raw_order.get("Email")
         or raw_order.get("cEmailAddress")
     )
@@ -117,11 +131,39 @@ def _extract_order_and_items(
     bill_country = bill_info.get("Country") or ship_country
 
     # Financials
-    currency = gen_info.get("Currency") or raw_order.get("Currency", "USD")
-    subtotal = Decimal(str(totals.get("SubTotal", raw_order.get("Subtotal", "0.0000"))))
-    tax = Decimal(str(totals.get("Tax", raw_order.get("Tax", raw_order.get("fTax", "0.0000")))))
+    currency = (
+        totals.get("Currency")
+        or gen_info.get("Currency")
+        or raw_order.get("Currency")
+        or ("CAD" if region_key == "CA" else "USD")
+    )
+    subtotal = Decimal(
+        str(
+            totals.get("Subtotal")
+            or totals.get("SubTotal")
+            or raw_order.get("Subtotal")
+            or raw_order.get("SubTotal")
+            or "0.0000"
+        )
+    )
+    tax = Decimal(
+        str(
+            totals.get("Tax")
+            or totals.get("TotalTax")
+            or raw_order.get("Tax")
+            or raw_order.get("fTax")
+            or "0.0000"
+        )
+    )
     shipping_charge = Decimal(
-        str(totals.get("Postage", ship_info.get("Cost", raw_order.get("ShippingCost", raw_order.get("fPostageCost", "0.0000")))))
+        str(
+            totals.get("PostageCost")
+            or totals.get("Postage")
+            or ship_info.get("Cost")
+            or raw_order.get("ShippingCost")
+            or raw_order.get("fPostageCost")
+            or "0.0000"
+        )
     )
     total = Decimal(
         str(
@@ -131,20 +173,32 @@ def _extract_order_and_items(
             or raw_order.get("fTotalCharge", "0.0000")
         )
     )
-    payment_method = raw_order.get("PaymentMethod") or gen_info.get("PaymentMethod")
+    payment_method = (
+        totals.get("PaymentMethod")
+        or raw_order.get("PaymentMethod")
+        or gen_info.get("PaymentMethod")
+    )
 
     # Shipping details
-    shipping_service = ship_info.get("ServiceName") or raw_order.get("PostalServiceName")
-    shipping_carrier = ship_info.get("Vendor") or raw_order.get("PostalServiceVendor")
+    shipping_service = (
+        ship_info.get("PostalServiceName")
+        or ship_info.get("ServiceName")
+        or raw_order.get("PostalServiceName")
+    )
+    shipping_carrier = (
+        ship_info.get("PostalServiceVendor")
+        or ship_info.get("Vendor")
+        or raw_order.get("PostalServiceVendor")
+    )
     tracking_number = (
         ship_info.get("TrackingNumber")
         or raw_order.get("PostalTrackingNumber")
         or raw_order.get("TrackingNumber")
     )
     fulfillment_loc_id = (
-        raw_order.get("LocationId")
+        raw_order.get("FulfilmentLocationId")
+        or raw_order.get("LocationId")
         or raw_order.get("StockLocationId")
-        or ship_info.get("PostalServiceId")
     )
 
     order_tuple = (
@@ -155,7 +209,7 @@ def _extract_order_and_items(
         source,
         subsource,
         status,
-        int(raw_status) if raw_status is not None else None,
+        str(raw_status) if raw_status is not None else None,
         is_parked,
         folders_str,
         date_received,
@@ -208,14 +262,42 @@ def _extract_order_and_items(
             continue
 
         stock_item_id = item.get("StockItemId")
-        sku = item.get("ItemNumber") or item.get("SKU") or item.get("ChannelSku", "UNKNOWN")
+        sku = (
+            item.get("SKU")
+            or item.get("ChannelSKU")
+            or item.get("ChannelSku")
+            or item.get("ItemNumber")
+            or "UNKNOWN"
+        )
         item_title = item.get("ItemTitle") or item.get("Title")
         qty = int(item.get("Qty", item.get("Quantity", 1)))
         unit_price = Decimal(str(item.get("PricePerUnit", item.get("Price", "0.0000"))))
-        line_total = Decimal(str(item.get("LineTotal", item.get("Total", unit_price * qty))))
+        line_total = Decimal(
+            str(
+                item.get("Cost")
+                or item.get("LineTotal")
+                or item.get("CostIncTax")
+                or item.get("Total")
+                or (unit_price * qty)
+            )
+        )
         tax_rate = Decimal(str(item.get("TaxRate", "0.0000")))
-        tax_amount = Decimal(str(item.get("TaxAmount", item.get("Tax", "0.0000"))))
-        discount = Decimal(str(item.get("LineDiscount", item.get("Discount", "0.0000"))))
+        tax_amount = Decimal(
+            str(
+                item.get("SalesTax")
+                or item.get("TaxAmount")
+                or item.get("Tax")
+                or "0.0000"
+            )
+        )
+        discount = Decimal(
+            str(
+                item.get("DiscountValue")
+                or item.get("LineDiscount")
+                or item.get("Discount")
+                or "0.0000"
+            )
+        )
 
         items_tuples.append((
             region_key,
@@ -327,6 +409,18 @@ SQL_UPSERT_ITEM = """
 """
 
 
+def _prune_stale_order_items(cursor, region: str, order_items_map: dict[str, set[str]]) -> None:
+    """Delete line items in lw_order_items that no longer exist in the order payload."""
+    for order_id, row_ids in order_items_map.items():
+        if row_ids:
+            placeholders = ",".join(["%s"] * len(row_ids))
+            sql = f"DELETE FROM lw_order_items WHERE region = %s AND order_id = %s AND row_id NOT IN ({placeholders})"
+            cursor.execute(sql, (region, order_id, *row_ids))
+        else:
+            sql = "DELETE FROM lw_order_items WHERE region = %s AND order_id = %s"
+            cursor.execute(sql, (region, order_id))
+
+
 def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False) -> int:
     """Synchronize current open orders with full line items into lw_orders and lw_order_items."""
     region_key = region.upper()
@@ -342,11 +436,14 @@ def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False
 
         orders_batch = []
         items_batch = []
+        order_items_map: dict[str, set[str]] = {}
 
         for ro in raw_orders:
             order_tuple, item_tuples = _extract_order_and_items(region_key, ro, default_status="open")
             orders_batch.append(order_tuple)
             items_batch.extend(item_tuples)
+            order_id = order_tuple[1]
+            order_items_map[order_id] = {item[2] for item in item_tuples}
 
         if dry_run:
             logger.info(f"[{region_key}] [DRY-RUN] Would upsert {len(orders_batch)} orders and {len(items_batch)} items.")
@@ -359,6 +456,8 @@ def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False
 
             for i in range(0, len(items_batch), chunk_size):
                 cursor.executemany(SQL_UPSERT_ITEM, items_batch[i : i + chunk_size])
+
+            _prune_stale_order_items(cursor, region_key, order_items_map)
 
         logger.info(f"[{region_key}] Successfully synced {len(orders_batch)} open orders and {len(items_batch)} items.")
         return len(orders_batch)
@@ -408,11 +507,14 @@ def sync_orders_delta(
 
         processed_batch = []
         processed_items = []
+        order_items_map: dict[str, set[str]] = {}
 
         for po in processed_orders:
             order_tuple, item_tuples = _extract_order_and_items(region_key, po, default_status="shipped")
             processed_batch.append(order_tuple)
             processed_items.extend(item_tuples)
+            order_id = order_tuple[1]
+            order_items_map[order_id] = {item[2] for item in item_tuples}
 
         if not dry_run and processed_batch:
             chunk_size = 500
@@ -422,6 +524,8 @@ def sync_orders_delta(
 
                 for i in range(0, len(processed_items), chunk_size):
                     cursor.executemany(SQL_UPSERT_ITEM, processed_items[i : i + chunk_size])
+
+                _prune_stale_order_items(cursor, region_key, order_items_map)
 
         # Step 3: Refunds Delta
         sync_refunds(client, region_key, from_str, to_str, dry_run=dry_run)

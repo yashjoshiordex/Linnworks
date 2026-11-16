@@ -27,6 +27,7 @@ def sync_refunds(
     from_date: str,
     to_date: str,
     dry_run: bool = False,
+    update_state: bool = False,
 ) -> int:
     """Synchronize refunds into lw_order_refunds and transition fully refunded orders.
     
@@ -40,6 +41,8 @@ def sync_refunds(
         raw_refunds = client.get_refunds(region_key, from_date, to_date)
         if not raw_refunds:
             logger.info(f"[{region_key}] No refunds found in window.")
+            if not dry_run and update_state:
+                update_sync_success(region_key, "refunds", new_cursor=to_date)
             return 0
 
         logger.info(f"[{region_key}] Fetched {len(raw_refunds)} refund record(s).")
@@ -48,16 +51,50 @@ def sync_refunds(
         affected_order_ids = set()
 
         for r in raw_refunds:
-            order_id = r.get("OrderId") or r.get("pkOrderID") or r.get("nOrderId")
-            refund_id = r.get("RefundId") or r.get("pkRefundId") or r.get("Reference") or r.get("RowId")
+            order_id = (
+                r.get("OrderId")
+                or r.get("pkOrderID")
+                or r.get("nOrderId")
+                or r.get("fkOrderId")
+                or r.get("fkOrderID")
+            )
+            refund_id = (
+                r.get("RefundId")
+                or r.get("pkRefundId")
+                or r.get("RefundHeaderId")
+                or r.get("RefundRowId")
+                or r.get("fkRefundId")
+                or r.get("Reference")
+                or r.get("RowId")
+            )
             if not order_id or not refund_id:
                 continue
 
-            sku = r.get("SKU") or r.get("ItemNumber")
-            qty = int(r.get("Quantity", r.get("Qty", 0)))
-            amount = Decimal(str(r.get("Amount") or r.get("RefundAmount", "0.0000")))
-            reason = r.get("Reason") or r.get("RefundReason", "Customer Refund")
-            refunded_at = parse_utc_datetime(r.get("RefundedAt") or r.get("Date") or r.get("CreatedDate"))
+            sku = r.get("SKU") or r.get("ItemNumber") or r.get("ChannelSKU")
+            raw_qty = r.get("Quantity") if r.get("Quantity") is not None else r.get("Qty")
+            qty = int(raw_qty) if raw_qty is not None else 0
+            amount = Decimal(
+                str(
+                    r.get("Amount")
+                    or r.get("RefundAmount")
+                    or r.get("TotalRefundAmount")
+                    or r.get("Total")
+                    or "0.0000"
+                )
+            )
+            reason = (
+                r.get("Reason")
+                or r.get("RefundReason")
+                or r.get("ReasonCategory")
+                or "Customer Refund"
+            )
+            refunded_at = parse_utc_datetime(
+                r.get("RefundedAt")
+                or r.get("RefundDate")
+                or r.get("Date")
+                or r.get("CreatedDate")
+                or r.get("ActionDate")
+            )
 
             if not refunded_at:
                 refunded_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -126,12 +163,13 @@ def sync_refunds(
                     )
                     logger.info(f"[{region_key}] Order {oid} is fully refunded (${total_refunded} >= ${order_total}). Status set to 'refunded'.")
 
-        update_sync_success(region_key, "refunds")
+        if not dry_run and update_state:
+            update_sync_success(region_key, "refunds", new_cursor=to_date)
         logger.info(f"[{region_key}] Successfully synced {len(refund_records)} refunds into lw_order_refunds.")
         return len(refund_records)
 
     except Exception as e:
-        if not dry_run:
+        if not dry_run and update_state:
             record_sync_error(region_key, "refunds", str(e))
         logger.error(f"[{region_key}] Refunds sync failed: {e}")
         raise

@@ -75,5 +75,3 @@ class Config:
     LOG_DIR: Path = BASE_DIR / os.getenv("LW_LOG_DIR", "logs")
     FIXTURES_DIR: Path = BASE_DIR / "fixtures"
 
-    # Table Prefix
-    TABLE_PREFIX: str = os.getenv("LW_TABLE_PREFIX", "lw_")

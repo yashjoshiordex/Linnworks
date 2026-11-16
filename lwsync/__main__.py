@@ -34,7 +34,7 @@ def test_live_connection() -> None:
             session = auth_mgr.get_session(reg, force_refresh=True)
             logger.info(f" [PASS] Successfully authenticated {reg}!")
             logger.info(f"        Assigned Server: {session.server}")
-            logger.info(f"        Session Token:   {session.token[:12]}... (active)")
+            logger.info("        Session Token:   [REDACTED] (active)")
 
             # Quick API probe: fetch stock locations
             logger.info(f"--> Probing API (fetching locations for {reg})...")
@@ -61,23 +61,42 @@ def execute_sync(
     client = get_client()
     regions = ["US", "CA"] if region.upper() == "ALL" else [region.upper()]
     entity_lower = entity.lower()
+    errors: list[str] = []
 
     for reg in regions:
-        logger.info(f"=== Starting Sync for Region: {reg} (Entity: {entity_lower}, DryRun: {dry_run}) ===")
+        try:
+            logger.info(f"=== Starting Sync for Region: {reg} (Entity: {entity_lower}, DryRun: {dry_run}) ===")
 
-        if entity_lower in ["locations", "all"]:
-            sync_locations(client, reg, dry_run=dry_run)
+            cached_products = None
+            if entity_lower == "all":
+                try:
+                    cached_products = client.get_all_products(reg, page_size=200)
+                    logger.info(f"[{reg}] Catalog fetched once ({len(cached_products)} products); reusing for products and stock.")
+                except Exception as e:
+                    logger.warning(f"[{reg}] Could not pre-fetch catalog: {e}")
 
-        if entity_lower in ["stock", "all"]:
-            sync_stock_levels(client, reg, dry_run=dry_run)
+            if entity_lower in ["locations", "all"]:
+                sync_locations(client, reg, dry_run=dry_run)
 
-        if entity_lower in ["products", "all"]:
-            sync_products(client, reg, dry_run=dry_run)
+            if entity_lower in ["stock", "all"]:
+                sync_stock_levels(client, reg, dry_run=dry_run, raw_products=cached_products)
 
-        if entity_lower in ["orders", "all"]:
-            sync_orders_delta(client, reg, dry_run=dry_run, lookback_days=lookback_days)
+            if entity_lower in ["products", "all"]:
+                sync_products(client, reg, dry_run=dry_run, raw_products=cached_products)
 
-    logger.info(f"=== Sync Completed Successfully for Entity: {entity_lower} ===")
+            if entity_lower in ["orders", "all"]:
+                sync_orders_delta(client, reg, dry_run=dry_run, lookback_days=lookback_days)
+
+            logger.info(f"=== Region {reg} Sync Completed Successfully ===")
+        except Exception as e:
+            logger.error(f"[{reg}] Regional sync failed: {e}")
+            errors.append(f"{reg}: {e}")
+
+    if errors:
+        logger.error(f"=== Sync completed with errors in regions: {'; '.join(errors)} ===")
+        sys.exit(1)
+    else:
+        logger.info(f"=== Sync Completed Successfully for Entity: {entity_lower} ===")
 
 
 def main() -> None:

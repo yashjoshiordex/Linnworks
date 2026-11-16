@@ -1,6 +1,6 @@
 """Locations and stock levels synchronization worker."""
 
-from typing import Any, List
+from typing import Any, Dict, List, Optional
 from lwsync.client.base import LinnworksClient
 from lwsync.db import get_db_cursor
 from lwsync.logger import logger
@@ -58,7 +58,12 @@ def sync_locations(client: LinnworksClient, region: str, dry_run: bool = False) 
         raise
 
 
-def sync_stock_levels(client: LinnworksClient, region: str, dry_run: bool = False) -> int:
+def sync_stock_levels(
+    client: LinnworksClient,
+    region: str,
+    dry_run: bool = False,
+    raw_products: Optional[List[Dict[str, Any]]] = None,
+) -> int:
     """Synchronize physical stock levels into lw_stock_levels.
     
     Idempotent on (region, sku, location_id).
@@ -67,8 +72,25 @@ def sync_stock_levels(client: LinnworksClient, region: str, dry_run: bool = Fals
     logger.info(f"[{region_key}] Starting stock levels sync...")
 
     try:
-        # Fetch stock levels (either across all locations or location by location)
-        stock_rows = client.get_stock_levels(region_key)
+        # Fetch stock levels or reuse pre-fetched catalog products
+        if raw_products is not None:
+            stock_rows = []
+            for p in raw_products:
+                sku = p.get("ItemNumber") or p.get("SKU")
+                levels = p.get("StockLevels") or []
+                for lvl in levels:
+                    loc = lvl.get("Location") or {}
+                    loc_id = loc.get("StockLocationId") or lvl.get("StockLocationId")
+                    if sku and loc_id:
+                        stock_rows.append({
+                            "SKU": sku,
+                            "StockLocationId": loc_id,
+                            "Level": lvl.get("Level", 0),
+                            "InOrders": lvl.get("InOrders", 0),
+                            "Available": lvl.get("Available", 0),
+                        })
+        else:
+            stock_rows = client.get_stock_levels(region_key)
         total_upserted = 0
 
         sql = """

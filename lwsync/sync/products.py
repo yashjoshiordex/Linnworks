@@ -29,7 +29,12 @@ EXTENDED_PROPERTY_MAP = {
 }
 
 
-def sync_products(client: LinnworksClient, region: str, dry_run: bool = False) -> int:
+def sync_products(
+    client: LinnworksClient,
+    region: str,
+    dry_run: bool = False,
+    raw_products: Optional[List[Dict[str, Any]]] = None,
+) -> int:
     """Synchronize catalog products and the 8 extended properties into lw_products.
     
     Idempotent on (region, sku).
@@ -39,7 +44,8 @@ def sync_products(client: LinnworksClient, region: str, dry_run: bool = False) -
 
     try:
         # Step 1: Ingest stock items across ALL pages
-        raw_products = client.get_all_products(region_key, page_size=200)
+        if raw_products is None:
+            raw_products = client.get_all_products(region_key, page_size=200)
 
         if not raw_products:
             logger.info(f"[{region_key}] No products returned from client.")
@@ -50,26 +56,47 @@ def sync_products(client: LinnworksClient, region: str, dry_run: bool = False) -
         # Step 2: Build property lookup map per StockItemId
         properties_by_item_id: Dict[str, Dict[str, str]] = {}
         ext_props_loaded = False
-        try:
-            extended_props = client.get_product_extended_properties(region_key)
-            ext_props_loaded = True
-            for prop in extended_props:
-                item_id = prop.get("StockItemId") or prop.get("fkStockItemId")
-                prop_name = (prop.get("ProperyName") or prop.get("PropertyName", "")).strip().lower()
-                prop_val = prop.get("PropertyValue", "")
-                if item_id:
-                    if item_id not in properties_by_item_id:
-                        properties_by_item_id[item_id] = {}
+
+        # First, attempt to extract properties embedded in raw_products (from GetStockItemsFull)
+        for p in raw_products:
+            item_id = p.get("StockItemId")
+            item_props = p.get("ItemExtendedProperties") or p.get("ExtendedProperties") or []
+            if item_id and item_props:
+                if item_id not in properties_by_item_id:
+                    properties_by_item_id[item_id] = {}
+                for prop in item_props:
+                    prop_name = (prop.get("ProperyName") or prop.get("PropertyName", "")).strip().lower()
+                    prop_val = prop.get("PropertyValue", "")
                     col = EXTENDED_PROPERTY_MAP.get(prop_name)
                     if col:
                         properties_by_item_id[item_id][col] = prop_val
-                    else:
-                        logger.warning(
-                            f"[{region_key}] Unmapped extended property '{prop_name}' on item {item_id}. Ignored."
-                        )
-        except Exception as e:
-            logger.warning(f"[{region_key}] Could not fetch extended properties: {e}. "
-                           "Extended property columns will NOT be overwritten for existing rows.")
+
+        # If not embedded (e.g. legacy fixture client), fall back to client method
+        if not properties_by_item_id:
+            try:
+                extended_props = client.get_product_extended_properties(region_key)
+                for prop in extended_props:
+                    item_id = prop.get("StockItemId") or prop.get("fkStockItemId")
+                    prop_name = (prop.get("ProperyName") or prop.get("PropertyName", "")).strip().lower()
+                    prop_val = prop.get("PropertyValue", "")
+                    if item_id:
+                        if item_id not in properties_by_item_id:
+                            properties_by_item_id[item_id] = {}
+                        col = EXTENDED_PROPERTY_MAP.get(prop_name)
+                        if col:
+                            properties_by_item_id[item_id][col] = prop_val
+                        else:
+                            logger.warning(
+                                f"[{region_key}] Unmapped extended property '{prop_name}' on item {item_id}. Ignored."
+                            )
+            except Exception as e:
+                logger.warning(
+                    f"[{region_key}] Could not fetch extended properties: {e}. "
+                    "Extended property columns will NOT be overwritten for existing rows."
+                )
+
+        if properties_by_item_id:
+            ext_props_loaded = True
 
         # Step 3: Prepare records for bulk upsert
         # When extended properties failed to load, use COALESCE to protect existing values
@@ -163,10 +190,23 @@ def sync_products(client: LinnworksClient, region: str, dry_run: bool = False) -
             tag = props.get("product_tag") or p.get("ProductTag")
 
             records.append((
-                region_key, stock_item_id, str(sku), title, cost, retail_price,
-                category, barcode, weight,
-                brand, fill_sku, product_line, master_sku,
-                sub_1, sub_2, mpn, tag
+                region_key,
+                stock_item_id,
+                str(sku)[:100],
+                str(title)[:500] if title is not None else None,
+                cost,
+                retail_price,
+                str(category)[:255] if category is not None else None,
+                str(barcode)[:100] if barcode is not None else None,
+                weight,
+                str(brand)[:100] if brand is not None else None,
+                str(fill_sku)[:100] if fill_sku is not None else None,
+                str(product_line)[:100] if product_line is not None else None,
+                str(master_sku)[:100] if master_sku is not None else None,
+                str(sub_1)[:100] if sub_1 is not None else None,
+                str(sub_2)[:100] if sub_2 is not None else None,
+                str(mpn) if mpn is not None else None,
+                str(tag)[:255] if tag is not None else None,
             ))
 
         if dry_run:

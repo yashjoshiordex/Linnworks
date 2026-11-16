@@ -81,11 +81,14 @@ cp .env.example .env
 Open `.env` and fill in your database credentials and Linnworks application tokens.
 
 ### Step 4: Initialize Database & Verify Tables
-Run the database auto-initialization command:
+For local development:
 ```bash
 python -m lwsync init-db
 ```
-*This verifies connection to MySQL, creates the database if missing, and executes `sql/001_create_tables.sql` using `CREATE TABLE IF NOT EXISTS`. Existing tables are left untouched.*
+*This verifies connection to MySQL, creates the database if missing, and executes `sql/001_create_tables.sql` using `CREATE TABLE IF NOT EXISTS`.*
+
+**Production RDS Note:**  
+In production environments (e.g. AWS RDS), the application database user typically does not have global `CREATE DATABASE` privileges. Apply `sql/001_create_tables.sql` once manually using an admin/migration user on your target database, and always pass `--skip-db-init` to scheduled production cron runs.
 
 ---
 
@@ -207,16 +210,16 @@ PYTHON_BIN=/opt/linnworks/.venv/bin/python
 
 # 1. Orders & Refunds (Every 15 minutes)
 # Delta sync processed/changed orders + open orders + refunds with 10-min overlap
-*/15 * * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run orders >> $PROJECT_DIR/logs/cron_orders.log 2>&1
+*/15 * * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run orders --skip-db-init >> $PROJECT_DIR/logs/cron_orders.log 2>&1
 
 # 2. Locations & Stock Levels (Every 30 minutes)
 # Refresh physical on-hand, allocated, and available inventory levels
-*/30 * * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run locations >> $PROJECT_DIR/logs/cron_inventory.log 2>&1
-5,35 * * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run stock >> $PROJECT_DIR/logs/cron_inventory.log 2>&1
+*/30 * * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run locations --skip-db-init >> $PROJECT_DIR/logs/cron_inventory.log 2>&1
+5,35 * * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run stock --skip-db-init >> $PROJECT_DIR/logs/cron_inventory.log 2>&1
 
 # 3. Products & Extended Properties (Every 6 hours)
 # Full catalog upsert including the 8 extended properties
-0 */6 * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run products >> $PROJECT_DIR/logs/cron_products.log 2>&1
+0 */6 * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run products --skip-db-init >> $PROJECT_DIR/logs/cron_products.log 2>&1
 
 # ==============================================================================
 ```
@@ -290,6 +293,12 @@ If Linnworks returns an extended property not in the 8 target columns, `lwsync` 
 Logs are written to both standard output (`stdout`) and a rotating file at `logs/lwsync.log` (maximum 10 MB per file, up to 5 archived backups).
 
 ---
+
+## GI pipeline file layer (Deliverable 2)
+
+See [3PL_DELIVERABLE2.md](3PL_DELIVERABLE2.md) for supported file operations and integration requirements.
+Run the isolated tests with `python tests/run_offline.py --pipeline-only`.
+Production routing and API actions are not enabled by this layer.
 
 ## License & Support
 Internal proprietary system built for **BatteryClerk**. For questions or infrastructure support, contact the integration engineering team.
