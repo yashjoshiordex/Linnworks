@@ -58,6 +58,20 @@ def sync_locations(client: LinnworksClient, region: str, dry_run: bool = False) 
         raise
 
 
+def _first_value(item: Dict[str, Any], *keys: str) -> Any:
+    """First key present with a non-None value (a real 0 is kept, unlike `a or b`)."""
+    for key in keys:
+        value = item.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _first_int(item: Dict[str, Any], *keys: str) -> int:
+    value = _first_value(item, *keys)
+    return int(value) if value is not None else 0
+
+
 def sync_stock_levels(
     client: LinnworksClient,
     region: str,
@@ -82,12 +96,13 @@ def sync_stock_levels(
                     loc = lvl.get("Location") or {}
                     loc_id = loc.get("StockLocationId") or lvl.get("StockLocationId")
                     if sku and loc_id:
+                        # GetStockItemsFull keys: StockLevel (on hand), InOrders / InOrderBook, Available.
                         stock_rows.append({
                             "SKU": sku,
                             "StockLocationId": loc_id,
-                            "Level": lvl.get("Level", 0),
-                            "InOrders": lvl.get("InOrders", 0),
-                            "Available": lvl.get("Available", 0),
+                            "StockLevel": lvl.get("StockLevel"),
+                            "InOrders": lvl.get("InOrders", lvl.get("InOrderBook")),
+                            "Available": lvl.get("Available"),
                         })
         else:
             stock_rows = client.get_stock_levels(region_key)
@@ -112,9 +127,10 @@ def sync_stock_levels(
                 if not sku or not loc_id:
                     continue
 
-                on_hand = int(item.get("Quantity", item.get("StockLevel", 0)))
-                allocated = int(item.get("InOrders", item.get("Allocated", 0)))
-                available = int(item.get("Available", on_hand - allocated))
+                on_hand = _first_int(item, "Quantity", "StockLevel")
+                allocated = _first_int(item, "InOrders", "InOrderBook", "Allocated")
+                raw_available = _first_value(item, "Available")
+                available = int(raw_available) if raw_available is not None else on_hand - allocated
 
                 batch.append((region_key, str(sku), str(loc_id), on_hand, allocated, available))
 

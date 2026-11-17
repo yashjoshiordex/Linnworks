@@ -1,5 +1,6 @@
 """V2 API and cursor regression tests using fake responses and database mocks."""
 
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 import json
 
@@ -134,7 +135,10 @@ def test_failure_never_advances_cursor(client, stage, region):
          patch.object(orders, "update_sync_success") as success, \
          patch.object(orders, "record_sync_error") as error, \
          patch("lwsync.sync.refunds.record_sync_error"), \
-         patch.object(orders, "get_db_cursor", side_effect=failure) as db:
+         patch.object(orders, "get_db_cursor", side_effect=failure) as db, \
+         patch.object(orders, "sync_open_orders", return_value=0) if stage != "open" else nullcontext():
+        # Open-orders persistence (incl. the deleted-order check) is covered separately;
+        # here the DB mock only represents the processed-orders write.
         with pytest.raises(requests.Timeout, match=f"{stage} failed"):
             orders.sync_orders_delta(client, region)
         success.assert_not_called()
@@ -150,10 +154,18 @@ def test_empty_success_advances_cursor(client, region):
     client.get_open_orders = MagicMock(return_value=[])
     client.get_processed_orders = MagicMock(return_value=[])
     client.get_refunds = MagicMock(return_value=[])
+    db_cursor = MagicMock()
+    db_cursor.fetchall.return_value = []
+    manager = MagicMock()
+    manager.__enter__.return_value = db_cursor
     with patch.object(orders, "get_sync_cursor", return_value="2026-11-01T00:00:00Z"), \
+         patch.object(orders, "get_db_cursor", return_value=manager), \
          patch.object(orders, "update_sync_success") as success, \
+         patch("lwsync.sync.refunds.update_sync_success") as refunds_success, \
          patch.object(orders, "record_sync_error") as error:
         assert orders.sync_orders_delta(client, region) == 0
+    # N1: a run with zero refunds still records the refunds cursor.
+    assert refunds_success.call_args.args == (region, "refunds")
     success.assert_called_once()
     assert success.call_args.args == (region, "orders")
     assert success.call_args.kwargs["new_cursor"].endswith("Z")
@@ -202,7 +214,8 @@ def test_page_failure_through_sync_preserves_cursor(client, region, stage):
         with pytest.raises(requests.Timeout, match="later page failed"):
             orders.sync_orders_delta(client, region)
         success.assert_not_called()
-        db.assert_not_called()
+        # Only the successful open-orders refresh may write; the failed stage never persists.
+        assert db.call_count == (1 if stage == "updated" else 0)
         refunds.assert_not_called()
     assert all(call.args[2].endswith("/v2/orders") for call in request.call_args_list)
 
@@ -221,7 +234,8 @@ def test_nonempty_success_persists_before_advancing_cursor(client, region):
          patch.object(orders, "sync_refunds", side_effect=lambda *args, **kwargs: events.append("refunds")), \
          patch.object(orders, "update_sync_success", side_effect=lambda *args, **kwargs: events.append("cursor")):
         assert orders.sync_orders_delta(client, region) == 1
-    assert events == ["persist", "commit", "refunds", "cursor"]
+    # First commit = open-orders refresh (empty list, deleted-order check), then processed orders.
+    assert events == ["commit", "persist", "commit", "refunds", "cursor"]
 
 
 def test_bad_request_reports_validation_without_retry_or_token(client):

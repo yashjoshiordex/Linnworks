@@ -356,19 +356,8 @@ class LiveClient(LinnworksClient):
                 if key == "ProcessedOrders" and not include_processed:
                     continue
                 for order in (result[key] or []):
-                    gen_info = order.get("GeneralInfo") or {}
-                    raw_st = gen_info.get("Status") if "Status" in gen_info else order.get("Status")
-                    is_canc = (
-                        raw_st in (3, "3", "CANCELLED", "Cancelled", "cancelled")
-                        or order.get("IsCancelled") is True
-                        or order.get("Cancelled") is True
-                        or gen_info.get("IsCancelled") is True
-                        or gen_info.get("Cancelled") is True
-                        or (isinstance(order.get("FolderName"), list) and any("cancel" in str(f).lower() for f in order.get("FolderName")))
-                        or (isinstance(gen_info.get("FolderName"), list) and any("cancel" in str(f).lower() for f in gen_info.get("FolderName")))
-                    )
-                    status = "cancelled" if is_canc else default_status
-                    orders.append({**order, "_sync_status": status})
+                    # Cancellation is decided in one place: lwsync.sync.orders.is_cancelled_order().
+                    orders.append({**order, "_sync_status": default_status})
             next_token = result["NextSearchToken"]
             if next_token is None:
                 return orders

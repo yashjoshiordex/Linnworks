@@ -76,7 +76,8 @@
     "OrderId": "33333333-0000-0000-0000-000000000202",
     "NumOrderId": "100202",
     "GeneralInfo": {
-      "Status": 3,
+      "Status": 1,
+      "IsCancelled": true,
       "HoldOrParked": false,
       "Source": "SHOPIFY",
       "SubSource": "BatteryClerk US",

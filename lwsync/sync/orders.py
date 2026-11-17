@@ -13,6 +13,30 @@ from lwsync.sync.refunds import parse_utc_datetime, sync_refunds
 from lwsync.sync.state import get_sync_cursor, record_sync_error, update_sync_success
 
 
+def _money(*values: Any, default: Any = "0") -> Decimal:
+    """First value that is not None/empty, as Decimal. Keeps a real 0 (unlike `a or b`)."""
+    for value in values:
+        if value is not None and value != "":
+            return Decimal(str(value))
+    return Decimal(str(default))
+
+
+def _is_true(value: Any) -> bool:
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+def is_cancelled_order(raw_order: dict[str, Any]) -> bool:
+    """True if Linnworks flags the order as cancelled.
+
+    Linnworks sets GeneralInfo.IsCancelled on cancelled orders (confirmed on every cancelled
+    processed order in the live US and CA accounts). Do NOT use GeneralInfo.Status for this:
+    its values are 0 unpaid, 1 paid, 2 return, 3 pending, 4 resend, so 3 means PENDING.
+    Folder names are not used either: they are user-defined labels, not a cancellation flag.
+    """
+    gen_info = raw_order.get("GeneralInfo") or {}
+    return _is_true(gen_info.get("IsCancelled")) or _is_true(raw_order.get("IsCancelled"))
+
+
 def _extract_order_and_items(
     region: str,
     raw_order: dict[str, Any],
@@ -50,16 +74,7 @@ def _extract_order_and_items(
     is_parked = bool(gen_info.get("IsParked", False) or gen_info.get("HoldOrParked", False) or gen_info.get("HoldOrWait", False))
 
     effective_status = raw_order.get("_sync_status") or default_status
-    is_cancelled = (
-        raw_status in (3, "3", "CANCELLED", "Cancelled", "cancelled")
-        or effective_status == "cancelled"
-        or raw_order.get("IsCancelled") is True
-        or raw_order.get("Cancelled") is True
-        or gen_info.get("IsCancelled") is True
-        or gen_info.get("Cancelled") is True
-        or (isinstance(raw_order.get("FolderName"), list) and any("cancel" in str(f).lower() for f in raw_order.get("FolderName")))
-        or (isinstance(gen_info.get("FolderName"), list) and any("cancel" in str(f).lower() for f in gen_info.get("FolderName")))
-    )
+    is_cancelled = effective_status == "cancelled" or is_cancelled_order(raw_order)
 
     if is_cancelled:
         status = "cancelled"
@@ -137,42 +152,19 @@ def _extract_order_and_items(
         or raw_order.get("Currency")
         or ("CAD" if region_key == "CA" else "USD")
     )
-    subtotal = Decimal(
-        str(
-            totals.get("Subtotal")
-            or totals.get("SubTotal")
-            or raw_order.get("Subtotal")
-            or raw_order.get("SubTotal")
-            or "0.0000"
-        )
+    # Money fields use the first value that is present (a real 0 is kept; `a or b` would skip it).
+    subtotal = _money(totals.get("Subtotal"), totals.get("SubTotal"), raw_order.get("Subtotal"), raw_order.get("SubTotal"))
+    tax = _money(totals.get("Tax"), totals.get("TotalTax"), raw_order.get("Tax"), raw_order.get("fTax"))
+    # Shipping excluding tax: any tax on shipping is already inside `tax`, so total = subtotal + tax + shipping.
+    shipping_charge = _money(
+        totals.get("PostageCostExTax"),
+        totals.get("PostageCost"),
+        totals.get("Postage"),
+        ship_info.get("Cost"),
+        raw_order.get("ShippingCost"),
+        raw_order.get("fPostageCost"),
     )
-    tax = Decimal(
-        str(
-            totals.get("Tax")
-            or totals.get("TotalTax")
-            or raw_order.get("Tax")
-            or raw_order.get("fTax")
-            or "0.0000"
-        )
-    )
-    shipping_charge = Decimal(
-        str(
-            totals.get("PostageCost")
-            or totals.get("Postage")
-            or ship_info.get("Cost")
-            or raw_order.get("ShippingCost")
-            or raw_order.get("fPostageCost")
-            or "0.0000"
-        )
-    )
-    total = Decimal(
-        str(
-            totals.get("TotalCharge")
-            or totals.get("Total")
-            or raw_order.get("Total")
-            or raw_order.get("fTotalCharge", "0.0000")
-        )
-    )
+    total = _money(totals.get("TotalCharge"), totals.get("Total"), raw_order.get("Total"), raw_order.get("fTotalCharge"))
     payment_method = (
         totals.get("PaymentMethod")
         or raw_order.get("PaymentMethod")
@@ -271,33 +263,17 @@ def _extract_order_and_items(
         )
         item_title = item.get("ItemTitle") or item.get("Title")
         qty = int(item.get("Qty", item.get("Quantity", 1)))
-        unit_price = Decimal(str(item.get("PricePerUnit", item.get("Price", "0.0000"))))
-        line_total = Decimal(
-            str(
-                item.get("Cost")
-                or item.get("LineTotal")
-                or item.get("CostIncTax")
-                or item.get("Total")
-                or (unit_price * qty)
-            )
-        )
-        tax_rate = Decimal(str(item.get("TaxRate", "0.0000")))
-        tax_amount = Decimal(
-            str(
-                item.get("SalesTax")
-                or item.get("TaxAmount")
-                or item.get("Tax")
-                or "0.0000"
-            )
-        )
-        discount = Decimal(
-            str(
-                item.get("DiscountValue")
-                or item.get("LineDiscount")
-                or item.get("Discount")
-                or "0.0000"
-            )
-        )
+        unit_price = _money(item.get("PricePerUnit"), item.get("Price"))
+        # Cost = line total excluding tax, after discount (0 on a 100% discount line).
+        line_total = _money(item.get("Cost"), item.get("LineTotal"), default=unit_price * qty)
+        tax_rate = _money(item.get("TaxRate"))
+        # PricePerUnit includes tax when TaxCostInclusive is true (e.g. Amazon) and excludes it
+        # otherwise (e.g. Walmart). Store unit_price excluding tax, consistent with line_total (Cost).
+        if _is_true(item.get("TaxCostInclusive")) and tax_rate > 0:
+            unit_price = (unit_price / (1 + tax_rate / 100)).quantize(Decimal("0.0001"))
+        tax_amount = _money(item.get("SalesTax"), item.get("TaxAmount"), item.get("Tax"))
+        # DiscountValue is money; "Discount" is a percentage in Linnworks, so it is not used here.
+        discount = _money(item.get("DiscountValue"), item.get("LineDiscount"))
 
         items_tuples.append((
             region_key,
@@ -421,17 +397,54 @@ def _prune_stale_order_items(cursor, region: str, order_items_map: dict[str, set
             cursor.execute(sql, (region, order_id))
 
 
+def _mark_missing_open_orders_deleted(cursor, region: str, seen_order_ids: set[str]) -> int:
+    """Mark open/parked orders that Linnworks no longer returns as 'deleted'.
+
+    Only call this after a COMPLETE open-orders fetch (the live client raises on any
+    incomplete pagination, so reaching this point means the list is the full set).
+    An order that was processed in the meantime is set back to shipped/cancelled by the
+    processed-orders delta in the same run; one that reappears as open is set back to
+    open by the next upsert, so a wrong mark heals itself on the following run.
+    """
+    # Runs inside the caller's transaction: any failure rolls back the whole open-orders write.
+    cursor.execute(
+        "SELECT order_id, num_order_id FROM lw_orders WHERE region = %s AND status IN ('open', 'parked');",
+        (region,),
+    )
+    missing_rows = [row for row in cursor.fetchall() if row["order_id"] not in seen_order_ids]
+    if not missing_rows:
+        return 0
+
+    missing = [row["order_id"] for row in missing_rows]
+    # Order numbers only (no customer data), capped so a mass delete doesn't flood the log.
+    sample = [str(row["num_order_id"]) for row in missing_rows[:20]]
+    more = f" (+{len(missing_rows) - 20} more)" if len(missing_rows) > 20 else ""
+    logger.info(f"[{region}] Open orders no longer in Linnworks, marking deleted: {', '.join(sample)}{more}")
+
+    chunk_size = 500
+    for i in range(0, len(missing), chunk_size):
+        chunk = missing[i : i + chunk_size]
+        placeholders = ",".join(["%s"] * len(chunk))
+        cursor.execute(
+            "UPDATE lw_orders SET status = 'deleted', updated_at = CURRENT_TIMESTAMP "
+            f"WHERE region = %s AND status IN ('open', 'parked') AND order_id IN ({placeholders});",
+            (region, *chunk),
+        )
+    return len(missing)
+
+
 def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False) -> int:
-    """Synchronize current open orders with full line items into lw_orders and lw_order_items."""
+    """Synchronize current open orders with full line items into lw_orders and lw_order_items.
+
+    Open orders that were in lw_orders but are no longer returned by Linnworks
+    (deleted in Linnworks) are marked 'deleted'.
+    """
     region_key = region.upper()
     logger.info(f"[{region_key}] Starting open orders sync...")
 
     try:
-        raw_orders = client.get_open_orders(region_key, page=1, page_size=200)
-        if not raw_orders:
-            logger.info(f"[{region_key}] No open orders found.")
-            return 0
-
+        # Raises on any failed or incomplete page, so an empty list here really means "no open orders".
+        raw_orders = client.get_open_orders(region_key, page=1, page_size=200) or []
         logger.info(f"[{region_key}] Fetched {len(raw_orders)} open order(s).")
 
         orders_batch = []
@@ -446,7 +459,7 @@ def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False
             order_items_map[order_id] = {item[2] for item in item_tuples}
 
         if dry_run:
-            logger.info(f"[{region_key}] [DRY-RUN] Would upsert {len(orders_batch)} orders and {len(items_batch)} items.")
+            logger.info(f"[{region_key}] [DRY-RUN] Would upsert {len(orders_batch)} orders and {len(items_batch)} items (deleted-order check skipped).")
             return len(orders_batch)
 
         chunk_size = 500
@@ -459,6 +472,10 @@ def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False
 
             _prune_stale_order_items(cursor, region_key, order_items_map)
 
+            deleted_count = _mark_missing_open_orders_deleted(cursor, region_key, set(order_items_map))
+
+        if deleted_count:
+            logger.info(f"[{region_key}] Marked {deleted_count} open order(s) no longer in Linnworks as deleted.")
         logger.info(f"[{region_key}] Successfully synced {len(orders_batch)} open orders and {len(items_batch)} items.")
         return len(orders_batch)
 
@@ -528,7 +545,8 @@ def sync_orders_delta(
                 _prune_stale_order_items(cursor, region_key, order_items_map)
 
         # Step 3: Refunds Delta
-        sync_refunds(client, region_key, from_str, to_str, dry_run=dry_run)
+        # update_state=True so lw_sync_state gets a 'refunds' row on every run (even with 0 refunds).
+        sync_refunds(client, region_key, from_str, to_str, dry_run=dry_run, update_state=True)
 
         if not dry_run:
             # Advance sync state cursor to current time

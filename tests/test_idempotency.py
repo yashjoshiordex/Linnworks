@@ -85,25 +85,85 @@ class TestDeliverable5Unit:
         assert order_tuple[6] == "shipped"
 
     def test_order_status_cancelled_for_processed_orders(self):
-        """Cancelled processed orders map to status 'cancelled', not 'shipped'."""
+        """Cancelled processed orders (GeneralInfo.IsCancelled) map to 'cancelled', not 'shipped'."""
         raw_order = {
             "OrderId": "test-uuid-cancel-1",
             "Processed": True,
-            "GeneralInfo": {"Status": 3},
+            "GeneralInfo": {"Status": 1, "IsCancelled": True},
         }
         order_tuple, _ = _extract_order_and_items("US", raw_order, default_status="shipped")
         assert order_tuple[6] == "cancelled"
+        assert order_tuple[7] == "1"
+
+    def test_status_3_is_pending_not_cancelled(self):
+        """Linnworks Status 3 = PENDING. A pending open order must stay open."""
+        raw_order = {"OrderId": "test-uuid-pending", "GeneralInfo": {"Status": 3, "IsCancelled": False}}
+        order_tuple, _ = _extract_order_and_items("US", raw_order, default_status="open")
+        assert order_tuple[6] == "open"
         assert order_tuple[7] == "3"
 
+    def test_cancel_folder_alone_does_not_cancel(self):
+        """Folder names are user labels, not a cancellation flag."""
+        raw_order = {"OrderId": "test-uuid-folder", "Folders": ["Cancelled Orders"], "GeneralInfo": {"Status": 1}}
+        order_tuple, _ = _extract_order_and_items("US", raw_order, default_status="shipped")
+        assert order_tuple[6] == "shipped"
+
+    def test_is_cancelled_accepts_string_true(self):
+        raw_order = {"OrderId": "test-uuid-str", "GeneralInfo": {"Status": 1, "IsCancelled": "true"}}
+        order_tuple, _ = _extract_order_and_items("US", raw_order, default_status="shipped")
+        assert order_tuple[6] == "cancelled"
+
     def test_order_raw_status_string_does_not_crash(self):
-        """String raw_status (e.g. 'CANCELLED' or 'PAID') does not crash integer conversion."""
+        """A string raw_status does not crash and is stored as-is; it never implies cancelled."""
         raw_order = {
             "OrderId": "test-uuid-string-status",
             "GeneralInfo": {"Status": "CANCELLED"},
         }
         order_tuple, _ = _extract_order_and_items("US", raw_order, default_status="open")
-        assert order_tuple[6] == "cancelled"
+        assert order_tuple[6] == "open"
         assert order_tuple[7] == "CANCELLED"
+
+    def test_unit_price_excludes_tax_when_price_is_tax_inclusive(self):
+        """Live US order (Amazon): PricePerUnit 251.92 incl. 10.6562% tax, qty 4, Cost 910.64."""
+        raw_order = {"OrderId": "t-incl", "GeneralInfo": {"Status": 1}, "Items": [{
+            "RowId": "r1", "SKU": "X", "Quantity": 4, "PricePerUnit": 251.92, "TaxCostInclusive": True,
+            "TaxRate": 10.6562, "Cost": 910.640343695156, "CostIncTax": 1007.68, "SalesTax": 97.0396563048433}]}
+        _, items = _extract_order_and_items("US", raw_order)
+        unit_price, line_total, tax_amount = items[0][7], items[0][8], items[0][10]
+        assert round(unit_price * 4, 2) == Decimal("910.64")
+        assert round(line_total, 2) == Decimal("910.64")
+        assert round(line_total + tax_amount, 2) == Decimal("1007.68")
+
+    def test_unit_price_unchanged_when_price_is_tax_exclusive(self):
+        """Live US order (Walmart): PricePerUnit 70.59 excl. tax."""
+        raw_order = {"OrderId": "t-excl", "GeneralInfo": {"Status": 1}, "Items": [{
+            "RowId": "r1", "SKU": "X", "Quantity": 1, "PricePerUnit": 70.59, "TaxCostInclusive": False,
+            "TaxRate": 9.0947, "Cost": 70.59, "CostIncTax": 77.01, "SalesTax": 6.42}]}
+        _, items = _extract_order_and_items("US", raw_order)
+        assert items[0][7] == Decimal("70.59")
+        assert items[0][8] == Decimal("70.59")
+
+    def test_shipping_excludes_tax_so_totals_add_up(self):
+        """Live US Shopify order: PostageCost 96.34 incl. tax, PostageCostExTax 91.9977."""
+        raw_order = {"OrderId": "t-ship", "GeneralInfo": {"Status": 1}, "TotalsInfo": {
+            "Subtotal": 67.3800008594388, "PostageCost": 96.34, "PostageCostExTax": 91.9977081741788,
+            "Tax": 7.52229096638241, "TotalCharge": 166.9}, "Items": []}
+        order, _ = _extract_order_and_items("US", raw_order)
+        subtotal, tax, shipping, total = order[35], order[36], order[37], order[38]
+        assert round(shipping, 2) == Decimal("92.00")
+        assert round(subtotal + tax + shipping, 2) == round(total, 2) == Decimal("166.90")
+
+    def test_full_discount_line_keeps_zero_cost(self):
+        """Live US order with a 100% discount: Cost 0 must stay 0 (not price x qty)."""
+        raw_order = {"OrderId": "t-disc", "GeneralInfo": {"Status": 1}, "TotalsInfo": {
+            "Subtotal": 0, "PostageCost": 12.99, "PostageCostExTax": 12.99, "Tax": 0,
+            "TotalCharge": 12.99, "TotalDiscount": 62.49}, "Items": [{
+            "RowId": "r1", "SKU": "X", "Quantity": 1, "PricePerUnit": 62.49, "TaxCostInclusive": True,
+            "TaxRate": 0, "Cost": 0, "CostIncTax": 0, "SalesTax": 0, "Discount": 100, "DiscountValue": 62.49}]}
+        order, items = _extract_order_and_items("US", raw_order)
+        assert order[35] == Decimal("0")          # subtotal
+        assert items[0][8] == Decimal("0")        # line_total
+        assert items[0][11] == Decimal("62.49")   # discount is the money value, not the 100%
 
     def test_v2_live_payload_field_mapping(self):
         """Verify all v2 API fields (SKU precedence, CAD currency, Subtotal, email, etc.) are correctly mapped."""
@@ -164,7 +224,7 @@ class TestDeliverable5Unit:
         assert len(items) == 1
         item = items[0]
         assert item[4] == "AJC-D5S"                            # SKU takes precedence over channel ItemNumber!
-        assert item[8] == Decimal("62.79")                     # CostIncTax for line_total
+        assert item[8] == Decimal("59.99")                     # no Cost: price x qty (excl. tax), never CostIncTax
         assert item[10] == Decimal("7.80")                     # SalesTax for tax_amount
         assert item[11] == Decimal("5.00")                     # DiscountValue for discount
 

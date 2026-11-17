@@ -49,6 +49,7 @@ def sync_refunds(
 
         refund_records = []
         affected_order_ids = set()
+        skipped = 0
 
         for r in raw_refunds:
             order_id = (
@@ -68,6 +69,7 @@ def sync_refunds(
                 or r.get("RowId")
             )
             if not order_id or not refund_id:
+                skipped += 1
                 continue
 
             sku = r.get("SKU") or r.get("ItemNumber") or r.get("ChannelSKU")
@@ -111,6 +113,13 @@ def sync_refunds(
             ))
             affected_order_ids.add(str(order_id))
 
+        if skipped:
+            # Usually means the API field names differ from what we map; keys only, no customer data.
+            logger.warning(
+                f"[{region_key}] Skipped {skipped} refund record(s) without an order or refund ID "
+                f"(keys seen: {sorted(raw_refunds[0].keys()) if isinstance(raw_refunds[0], dict) else type(raw_refunds[0]).__name__})"
+            )
+
         if dry_run:
             logger.info(f"[{region_key}] [DRY-RUN] Would upsert {len(refund_records)} refund rows.")
             return len(refund_records)
@@ -129,13 +138,13 @@ def sync_refunds(
         """
 
         chunk_size = 500
+        # One transaction for both steps: refund rows and the 'refunded' status commit together or not at all.
         with get_db_cursor() as cursor:
             for i in range(0, len(refund_records), chunk_size):
                 cursor.executemany(sql_refunds, refund_records[i : i + chunk_size])
 
-        # Step 2: Evaluate Full Refund Status for Affected Orders
-        # Prompt requirement: "When an order is fully refunded, set orders.status to refunded."
-        with get_db_cursor() as cursor:
+            # Step 2: Evaluate Full Refund Status for Affected Orders
+            # Prompt requirement: "When an order is fully refunded, set orders.status to refunded."
             for oid in affected_order_ids:
                 # Get order total
                 cursor.execute(
@@ -161,7 +170,7 @@ def sync_refunds(
                         "UPDATE lw_orders SET status = 'refunded', updated_at = CURRENT_TIMESTAMP WHERE region = %s AND order_id = %s;",
                         (region_key, oid),
                     )
-                    logger.info(f"[{region_key}] Order {oid} is fully refunded (${total_refunded} >= ${order_total}). Status set to 'refunded'.")
+                    logger.info(f"[{region_key}] Order {oid} is fully refunded ({total_refunded} >= {order_total}). Status set to 'refunded'.")
 
         if not dry_run and update_state:
             update_sync_success(region_key, "refunds", new_cursor=to_date)

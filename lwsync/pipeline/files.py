@@ -147,6 +147,21 @@ def _rename_exclusive(source: Path, destination: Path) -> None:
         if rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1):
             code = ctypes.get_errno()
             raise OSError(code, os.strerror(code))
+    elif sys.platform == "darwin":
+        # Developer machines (production runs on Linux). renamex_np(RENAME_EXCL) is atomic and never replaces.
+        libc = ctypes.CDLL(None, use_errno=True)
+        renamex = getattr(libc, "renamex_np", None)
+        if renamex is not None:
+            renamex.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+            renamex.restype = ctypes.c_int
+            if renamex(os.fsencode(source), os.fsencode(destination), 0x00000004) == 0:  # RENAME_EXCL
+                return
+            code = ctypes.get_errno()
+            if code not in (errno.ENOTSUP, errno.EOPNOTSUPP):
+                raise OSError(code, os.strerror(code), str(destination))
+        # Filesystem without RENAME_EXCL: a hard link also refuses to overwrite (FileExistsError).
+        os.link(source, destination)
+        os.unlink(source)
     elif os.name == "nt":
         # Windows rename already refuses to replace an existing destination.
         os.rename(source, destination)
