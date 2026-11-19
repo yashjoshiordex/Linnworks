@@ -33,8 +33,8 @@ def test_cancelled_order_sync_maps_to_cancelled():
         cur.execute("SELECT status, raw_status FROM lw_orders WHERE region = 'US' AND num_order_id = '100202';")
         row = cur.fetchone()
         assert row is not None
-        assert row["status"] == "cancelled"
-        assert str(row["raw_status"]) == "3"
+        assert row["status"] == "cancelled"  # from GeneralInfo.IsCancelled
+        assert str(row["raw_status"]) == "1"  # Status stays the payment status (1 = paid)
 
 
 def test_stale_order_item_pruned():
@@ -81,3 +81,47 @@ def test_refunds_status_transition_logic():
     # Full refund should mark refunded
     assert full_refund >= order_total
 
+
+
+def test_open_order_deleted_in_linnworks_is_marked_deleted():
+    """N4: an open order missing from a complete open-orders fetch becomes 'deleted';
+    other regions and non-open orders are untouched, and a returning order is restored."""
+    client = FixtureClient()
+    gone_id = "99999999-0000-0000-0000-00000000dead"
+    shipped_id = "99999999-0000-0000-0000-00000000beef"
+    with get_db_cursor() as cur:
+        for region, order_id, status in (
+            ("US", gone_id, "open"),
+            ("CA", gone_id, "open"),        # same ID in the other region: must stay open
+            ("US", shipped_id, "shipped"),  # not open: must stay shipped
+        ):
+            cur.execute(
+                """INSERT INTO lw_orders (region, order_id, num_order_id, status) VALUES (%s, %s, 999001, %s)
+                   ON DUPLICATE KEY UPDATE status = VALUES(status)""",
+                (region, order_id, status),
+            )
+
+    sync_open_orders(client, "US", dry_run=False)
+
+    with get_db_cursor() as cur:
+        cur.execute("SELECT region, order_id, status FROM lw_orders WHERE order_id IN (%s, %s)", (gone_id, shipped_id))
+        got = {(r["region"], r["order_id"]): r["status"] for r in cur.fetchall()}
+        assert got[("US", gone_id)] == "deleted"
+        assert got[("CA", gone_id)] == "open"
+        assert got[("US", shipped_id)] == "shipped"
+        # Orders still returned by Linnworks stay open.
+        cur.execute(
+            "SELECT status FROM lw_orders WHERE region = 'US' AND order_id = '33333333-0000-0000-0000-000000000101'"
+        )
+        assert cur.fetchone()["status"] in ("open", "parked")
+
+    # If the order reappears in the open list, the normal upsert restores it.
+    original = client.get_open_orders
+    client.get_open_orders = lambda region, page=1, page_size=100: original(region, page, page_size) + [
+        {"OrderId": gone_id, "NumOrderId": "999001", "GeneralInfo": {"Status": 1}, "Items": []}
+    ]
+    sync_open_orders(client, "US", dry_run=False)
+    with get_db_cursor() as cur:
+        cur.execute("SELECT status FROM lw_orders WHERE region = 'US' AND order_id = %s", (gone_id,))
+        assert cur.fetchone()["status"] == "open"
+        cur.execute("DELETE FROM lw_orders WHERE order_id IN (%s, %s)", (gone_id, shipped_id))

@@ -1,4 +1,11 @@
-"""Configuration and SKU Swap Matrix for the 3PL Order Processing Pipeline."""
+"""EARLY DRAFT settings for the 3PL pipeline: SKU pairs, folders and alert e-mail.
+
+Superseded by the agreed design and to be replaced when the pipeline is built:
+- rules will come from a rules file (8 SKUs, quantity limit, substitutes), not the
+  placeholder pairs below (PRIMARY-SKU-001 etc. are not real SKUs);
+- folders now come from file_settings.py (LW_PIPELINE_<REGION>_* variables).
+Nothing in production uses this module yet.
+"""
 
 import os
 from dataclasses import dataclass
@@ -19,7 +26,7 @@ class SkuPairRule:
     location_id: str
 
 
-# Verified warehouse location GUIDs from lw_locations
+# Stock location IDs of the AJC warehouses (values from lw_locations), overridable via env.
 WAREHOUSE_LOCATIONS = {
     "US": {
         "name": "US | AJC",
@@ -31,7 +38,8 @@ WAREHOUSE_LOCATIONS = {
     },
 }
 
-# The 4 Primary-Substitute SKU pairs defined in the specification
+# Placeholder pairs from the original spec (not real SKUs; see the module docstring).
+# threshold: minimum available stock of the primary before the draft engine swaps.
 DEFAULT_SKU_SWAP_RULES: List[SkuPairRule] = [
     SkuPairRule(
         primary_sku=os.getenv("SKU_PAIR_1_PRIMARY", "PRIMARY-SKU-001"),
@@ -76,6 +84,7 @@ class PipelineConfig:
     # SFTP / Local directory structure
     SFTP_ROOT: Path = Path(os.getenv("3PL_SFTP_ROOT", str(BASE_DIR / "data" / "sftp")))
 
+    # Older folder layout from the first spec; the agreed layout is in file_settings.py.
     # Inbound: where Linnworks deposits exported orders
     LINNWORKS_EXPORT_DIR: Path = Path(
         os.getenv("3PL_LINNWORKS_EXPORT_DIR", str(SFTP_ROOT / "linnworks" / "orders"))

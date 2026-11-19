@@ -104,7 +104,7 @@ def test_fixture_orders_open_and_processed():
 
     # Check processed orders (shipped & cancelled)
     processed_orders = client.get_processed_orders("US", from_date="", to_date="")
-    cancelled = next((o for o in processed_orders if o["GeneralInfo"].get("Status") == 3), None)
+    cancelled = next((o for o in processed_orders if o["GeneralInfo"].get("IsCancelled") is True), None)
     assert cancelled is not None
 
     # Check order details lookup

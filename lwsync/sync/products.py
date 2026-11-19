@@ -1,14 +1,22 @@
-"""Products and extended properties synchronization worker."""
+"""Sync the Linnworks inventory (catalog) into lw_products, one row per (region, sku).
+
+Besides the standard fields, each item has "extended properties" (custom fields set up in
+Linnworks). We store 8 of them as columns; fill_sku, master_sku and substitute_1/2 are the
+ones the 3PL pipeline relies on.
+
+Source: GetStockItemsFull, which already includes each item's extended properties.
+"""
 
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from lwsync.client.base import LinnworksClient
-from lwsync.db import get_db_cursor
+from lwsync.db import get_db_cursor, with_db_retry
 from lwsync.logger import logger
 from lwsync.sync.state import update_sync_success, record_sync_error
 
-# Explicit mapping for the 8 extended properties defined in prompt
-# Property Name in Linnworks -> Database Column Name
+# Extended property name in Linnworks (lower-cased) -> lw_products column.
+# Several spellings are listed because names are typed by hand in Linnworks and could vary.
+# Properties not listed here are ignored.
 EXTENDED_PROPERTY_MAP = {
     "brand": "brand",
     "fill sku": "fill_sku",
@@ -57,7 +65,9 @@ def sync_products(
         properties_by_item_id: Dict[str, Dict[str, str]] = {}
         ext_props_loaded = False
 
-        # First, attempt to extract properties embedded in raw_products (from GetStockItemsFull)
+        # Normal case: properties come embedded in each item from GetStockItemsFull.
+        # "ProperyName" (missing t) is not our typo: some Linnworks responses spell it that way,
+        # so both spellings are read.
         for p in raw_products:
             item_id = p.get("StockItemId")
             item_props = p.get("ItemExtendedProperties") or p.get("ExtendedProperties") or []
@@ -71,7 +81,8 @@ def sync_products(
                     if col:
                         properties_by_item_id[item_id][col] = prop_val
 
-        # If not embedded (e.g. legacy fixture client), fall back to client method
+        # Fallback when no item had embedded properties (e.g. the fixture client): ask the client
+        # for them separately.
         if not properties_by_item_id:
             try:
                 extended_props = client.get_product_extended_properties(region_key)
@@ -98,8 +109,11 @@ def sync_products(
         if properties_by_item_id:
             ext_props_loaded = True
 
-        # Step 3: Prepare records for bulk upsert
-        # When extended properties failed to load, use COALESCE to protect existing values
+        # Step 3: choose the upsert statement.
+        # Properties loaded: overwrite the property columns with what Linnworks says now
+        # (a property removed in Linnworks becomes NULL here too).
+        # Properties failed to load: COALESCE keeps the values already in the DB, so a
+        # temporary failure doesn't blank out fill_sku etc. for every product.
         if ext_props_loaded:
             sql = """
                 INSERT INTO lw_products (
@@ -165,9 +179,11 @@ def sync_products(
             """
 
         records = []
+        skipped_no_sku = []  # StockItemIds of items without a SKU (logged below, never silent)
         for p in raw_products:
             sku = p.get("ItemNumber") or p.get("SKU")
             if not sku:
+                skipped_no_sku.append(str(p.get("StockItemId") or p.get("ItemId") or "?"))
                 continue
 
             stock_item_id = p.get("StockItemId") or p.get("ItemId")
@@ -189,6 +205,8 @@ def sync_products(
             mpn = props.get("mfr_part_number") or p.get("MfrPartNumber")
             tag = props.get("product_tag") or p.get("ProductTag")
 
+            # Text is cut to the column sizes in sql/001_create_tables.sql, so one unusually long
+            # value can't make the whole batch fail.
             records.append((
                 region_key,
                 stock_item_id,
@@ -209,22 +227,34 @@ def sync_products(
                 str(tag)[:255] if tag is not None else None,
             ))
 
+        if skipped_no_sku:
+            logger.warning(
+                f"[{region_key}] Skipped {len(skipped_no_sku)} inventory item(s) without a SKU "
+                f"(StockItemIds: {', '.join(skipped_no_sku[:10])}"
+                f"{' ...' if len(skipped_no_sku) > 10 else ''})"
+            )
+
         if dry_run:
             logger.info(f"[{region_key}] [DRY-RUN] Would upsert {len(records)} products.")
             return len(records)
 
-        # Step 4: Execute bulk upsert in 500-item chunks
+        # Step 4: write in chunks of 500 rows, all in ONE transaction: if anything fails,
+        # nothing from this run is saved.
+        # with_db_retry runs the whole transaction again after a temporary DB error.
         chunk_size = 500
-        with get_db_cursor() as cursor:
-            for i in range(0, len(records), chunk_size):
-                cursor.executemany(sql, records[i : i + chunk_size])
 
+        def write() -> None:
+            with get_db_cursor() as cursor:
+                for i in range(0, len(records), chunk_size):
+                    cursor.executemany(sql, records[i : i + chunk_size])
+
+        with_db_retry(write, f"{region_key} products")
         update_sync_success(region_key, "products")
         logger.info(f"[{region_key}] Successfully upserted {len(records)} products into lw_products.")
         return len(records)
 
     except Exception as e:
         record_sync_error(region_key, "products", str(e))
-        logger.error(f"[{region_key}] Products sync failed: {e}")
+        logger.error(f"[{region_key}] Products sync failed: {e}")  # traceback: logged by the CLI
         raise
 

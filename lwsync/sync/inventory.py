@@ -1,8 +1,14 @@
-"""Locations and stock levels synchronization worker."""
+"""Sync stock locations (lw_locations) and stock per SKU and location (lw_stock_levels).
+
+Locations are e.g. "US | AJC", "Default", "Review". The pipeline reads stock for the master
+SKU at the AJC location (US | AJC / CA | AJC).
+Stock columns: on_hand = Linnworks "Level", allocated = "In Order" (reserved by open orders),
+available = "Available" (on_hand - allocated; can be negative).
+"""
 
 from typing import Any, Dict, List, Optional
 from lwsync.client.base import LinnworksClient
-from lwsync.db import get_db_cursor
+from lwsync.db import get_db_cursor, with_db_retry
 from lwsync.logger import logger
 from lwsync.sync.state import update_sync_success, record_sync_error
 
@@ -44,9 +50,14 @@ def sync_locations(client: LinnworksClient, region: str, dry_run: bool = False) 
             is_default = bool(loc.get("IsDefault", False))
             if loc_id:
                 records.append((region_key, str(loc_id), name, is_default))
+            else:
+                logger.warning(f"[{region_key}] Skipped location without an ID: '{name}'")
 
-        with get_db_cursor() as cursor:
-            cursor.executemany(sql, records)
+        def write() -> None:
+            with get_db_cursor() as cursor:
+                cursor.executemany(sql, records)
+
+        with_db_retry(write, f"{region_key} locations")
 
         update_sync_success(region_key, "locations")
         logger.info(f"[{region_key}] Successfully upserted {len(records)} locations into lw_locations.")
@@ -54,8 +65,23 @@ def sync_locations(client: LinnworksClient, region: str, dry_run: bool = False) 
 
     except Exception as e:
         record_sync_error(region_key, "locations", str(e))
-        logger.error(f"[{region_key}] Locations sync failed: {e}")
+        logger.error(f"[{region_key}] Locations sync failed: {e}")  # traceback: logged by the CLI
         raise
+
+
+def _first_value(item: Dict[str, Any], *keys: str) -> Any:
+    """First key present with a non-None value (a real 0 is kept, unlike `a or b`)."""
+    for key in keys:
+        value = item.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _first_int(item: Dict[str, Any], *keys: str) -> int:
+    """Like _first_value, as an int; 0 if none of the keys has a value."""
+    value = _first_value(item, *keys)
+    return int(value) if value is not None else 0
 
 
 def sync_stock_levels(
@@ -72,7 +98,11 @@ def sync_stock_levels(
     logger.info(f"[{region_key}] Starting stock levels sync...")
 
     try:
-        # Fetch stock levels or reuse pre-fetched catalog products
+        # Two sources with the same result:
+        # - raw_products given (the "all" command): reuse the catalog already downloaded.
+        # - otherwise: client.get_stock_levels() downloads the catalog itself.
+        # Both flatten each item's StockLevels list into one row per (sku, location).
+        skipped = 0  # stock entries without a SKU or location ID (warned about below)
         if raw_products is not None:
             stock_rows = []
             for p in raw_products:
@@ -81,14 +111,17 @@ def sync_stock_levels(
                 for lvl in levels:
                     loc = lvl.get("Location") or {}
                     loc_id = loc.get("StockLocationId") or lvl.get("StockLocationId")
-                    if sku and loc_id:
-                        stock_rows.append({
-                            "SKU": sku,
-                            "StockLocationId": loc_id,
-                            "Level": lvl.get("Level", 0),
-                            "InOrders": lvl.get("InOrders", 0),
-                            "Available": lvl.get("Available", 0),
-                        })
+                    if not (sku and loc_id):
+                        skipped += 1
+                        continue
+                    # GetStockItemsFull keys: StockLevel (on hand), InOrders / InOrderBook, Available.
+                    stock_rows.append({
+                        "SKU": sku,
+                        "StockLocationId": loc_id,
+                        "StockLevel": lvl.get("StockLevel"),
+                        "InOrders": lvl.get("InOrders", lvl.get("InOrderBook")),
+                        "Available": lvl.get("Available"),
+                    })
         else:
             stock_rows = client.get_stock_levels(region_key)
         total_upserted = 0
@@ -110,11 +143,15 @@ def sync_stock_levels(
                 sku = item.get("SKU") or item.get("ItemNumber")
                 loc_id = item.get("StockLocationId") or item.get("LocationId")
                 if not sku or not loc_id:
+                    skipped += 1
                     continue
 
-                on_hand = int(item.get("Quantity", item.get("StockLevel", 0)))
-                allocated = int(item.get("InOrders", item.get("Allocated", 0)))
-                available = int(item.get("Available", on_hand - allocated))
+                # Different sources name the same values differently; take the first one present.
+                # Available falls back to on_hand - allocated if Linnworks didn't send it.
+                on_hand = _first_int(item, "Quantity", "StockLevel")
+                allocated = _first_int(item, "InOrders", "InOrderBook", "Allocated")
+                raw_available = _first_value(item, "Available")
+                available = int(raw_available) if raw_available is not None else on_hand - allocated
 
                 batch.append((region_key, str(sku), str(loc_id), on_hand, allocated, available))
 
@@ -122,11 +159,17 @@ def sync_stock_levels(
                 logger.info(f"[{region_key}] [DRY-RUN] Would upsert {len(batch)} stock rows.")
                 total_upserted += len(batch)
             else:
-                with get_db_cursor() as cursor:
-                    chunk_size = 500
-                    for i in range(0, len(batch), chunk_size):
-                        cursor.executemany(sql, batch[i : i + chunk_size])
+                def write() -> None:
+                    with get_db_cursor() as cursor:
+                        chunk_size = 500
+                        for i in range(0, len(batch), chunk_size):
+                            cursor.executemany(sql, batch[i : i + chunk_size])
+
+                with_db_retry(write, f"{region_key} stock levels")
                 total_upserted += len(batch)
+
+        if skipped:
+            logger.warning(f"[{region_key}] Skipped {skipped} stock entries without a SKU or location ID.")
 
         if not dry_run:
             update_sync_success(region_key, "stock_levels")
@@ -136,6 +179,6 @@ def sync_stock_levels(
 
     except Exception as e:
         record_sync_error(region_key, "stock_levels", str(e))
-        logger.error(f"[{region_key}] Stock levels sync failed: {e}")
+        logger.error(f"[{region_key}] Stock levels sync failed: {e}")  # traceback: logged by the CLI
         raise
 

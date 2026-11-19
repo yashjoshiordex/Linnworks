@@ -1,0 +1,15 @@
+# lwsync cron jobs for the Scripts server (user ubuntu). Server time is UTC.
+# Install: crontab -e, then paste these lines below the existing ShipStation jobs (don't touch those).
+# flock -n: if the previous run of the same job is still going, this run is skipped (no overlap, no pile-up).
+# Logs: each job writes its own file in /home/ubuntu/lwsync-logs (orders.log, catalog.log, health.log).
+# cron.log only receives crashes that happen before logging starts.
+
+# Orders, both regions, every 15 minutes (~5 min per run with today's open-order volume)
+*/15 * * * * cd /home/ubuntu/lwsync && flock -n /run/lock/lwsync-orders.lock .venv/bin/python -m lwsync run orders --region ALL --skip-db-init >> /home/ubuntu/lwsync-logs/cron.log 2>&1
+
+# Catalog: locations, stock and products, both regions, every 2 hours at :40 (~17 min per run)
+40 */2 * * * cd /home/ubuntu/lwsync && flock -n /run/lock/lwsync-catalog.lock .venv/bin/python -m lwsync run catalog --region ALL --skip-db-init >> /home/ubuntu/lwsync-logs/cron.log 2>&1
+
+# Health check every 15 minutes (5 minutes after the orders run starts); problems go to health.log.
+# E-mail alerts will be added here once the SES DNS records are live.
+5-59/15 * * * * cd /home/ubuntu/lwsync && .venv/bin/python -m lwsync health >> /home/ubuntu/lwsync-logs/cron.log 2>&1

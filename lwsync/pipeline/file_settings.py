@@ -1,4 +1,15 @@
-"""Regional GI filesystem settings, independent of the draft swap rules."""
+"""Folder settings for one region of the pipeline (GI = the 3PL's SFTP folders).
+
+Environment variables (REGION = US or CA):
+  LW_PIPELINE_<REGION>_INPUT_DIR    where Linnworks drops AJC exports  (default /data/<region>/new_orders)
+  LW_PIPELINE_<REGION>_OUTPUT_DIR   what the 3PL picks up              (default /data/<region>/orders)
+  LW_PIPELINE_<REGION>_ARCHIVE_DIR  processed inputs, by date          (default /data/<region>/archive)
+  LW_PIPELINE_<REGION>_TEMP_DIR     staging for atomic writes          (default /data/<region>/.pipeline_tmp)
+  LW_PIPELINE_<REGION>_HELD_DIR     required, no default
+  LW_PIPELINE_<REGION>_ERROR_DIR    required, no default
+  LW_PIPELINE_LOCK_FILE             one run at a time (default /run/lock/lwsync-pipeline.lock)
+  LW_PIPELINE_STABLE_SECONDS        a file must be unchanged this long before pickup (min 60)
+"""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +19,8 @@ import os
 
 @dataclass(frozen=True)
 class FileSettings:
+    """Validated folder paths for one region. Build it with FileSettings.from_env("US")."""
+
     region: str
     input_dir: Path
     output_dir: Path
@@ -19,6 +32,9 @@ class FileSettings:
     stable_seconds: int = 60
 
     def __post_init__(self):
+        # Refuse unsafe setups at start-up: folders must not be the same or nested inside each
+        # other (e.g. output inside input would make the pipeline re-read its own files), and
+        # the lock file must not sit in a data folder.
         if self.region not in ("US", "CA"):
             raise ValueError("Unknown pipeline region")
         if self.stable_seconds < 60:
@@ -36,6 +52,7 @@ class FileSettings:
 
     @classmethod
     def from_env(cls, region: str, env: Mapping[str, str] | None = None):
+        """Read the settings from environment variables (or a given dict, for tests)."""
         values = os.environ if env is None else env
         region = region.upper()
         if region not in ("US", "CA"):

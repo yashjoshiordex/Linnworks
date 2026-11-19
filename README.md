@@ -67,7 +67,8 @@ source .venv/bin/activate
 ### Step 2: Install Dependencies
 ```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements.txt        # production
+pip install -r requirements-dev.txt    # development: adds pytest
 ```
 
 ### Step 3: Configure Environment Variables
@@ -188,43 +189,23 @@ python -m lwsync run orders --dry-run
 
 ---
 
-## 7. Production Scheduling (Crontab Example)
+## 7. Production (Scripts server)
 
-On your Linux production server (e.g. AWS EC2 instance running Ubuntu), configure crontab jobs matching the client business intervals.
+Step-by-step install, cron, log rotation and how to read the logs: **[deploy/INSTALL.md](deploy/INSTALL.md)**.
 
-Open the crontab editor:
-```bash
-crontab -e
-```
+| Job | Schedule (UTC) | Command | Log file |
+|---|---|---|---|
+| Orders + refunds, both regions | every 15 min | `run orders --region ALL --skip-db-init` | `orders.log` |
+| Catalog (locations, stock, products, one download) | every 2 h at :40 | `run catalog --region ALL --skip-db-init` | `catalog.log` |
+| Health check | every 15 min | `health` | `health.log` |
 
-Add the following schedule entries:
+The exact cron lines are in [deploy/crontab.txt](deploy/crontab.txt) (with `flock` so runs never overlap) and the
+logrotate config (daily, kept 90 days, compressed) in [deploy/logrotate-lwsync](deploy/logrotate-lwsync).
 
-```cron
-# ==============================================================================
-# BatteryClerk Linnworks -> MySQL RDS Synchronization Schedule (UTC)
-# ==============================================================================
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-PROJECT_DIR=/opt/linnworks
-PYTHON_BIN=/opt/linnworks/.venv/bin/python
-
-# 1. Orders & Refunds (Every 15 minutes)
-# Delta sync processed/changed orders + open orders + refunds with 10-min overlap
-*/15 * * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run orders --skip-db-init >> $PROJECT_DIR/logs/cron_orders.log 2>&1
-
-# 2. Locations & Stock Levels (Every 30 minutes)
-# Refresh physical on-hand, allocated, and available inventory levels
-*/30 * * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run locations --skip-db-init >> $PROJECT_DIR/logs/cron_inventory.log 2>&1
-5,35 * * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run stock --skip-db-init >> $PROJECT_DIR/logs/cron_inventory.log 2>&1
-
-# 3. Products & Extended Properties (Every 6 hours)
-# Full catalog upsert including the 8 extended properties
-0 */6 * * * cd $PROJECT_DIR && $PYTHON_BIN -m lwsync run products --skip-db-init >> $PROJECT_DIR/logs/cron_products.log 2>&1
-
-# ==============================================================================
-```
-
-> **Alerting on Failure**: If any sync job fails, `lwsync` logs the error into `lw_sync_state.last_error` and exits with a **non-zero exit code (`sys.exit(1)`)**. Standard cron monitoring tools or AWS CloudWatch agents monitoring the log files will immediately trigger alerts.
+Every run logs a start line (version, regions, mode), one line per step and a summary:
+`Run finished outcome=ok duration=312s | US orders=ok(14042,270s) | CA orders=ok(4555,48s)`.
+A failed step is logged with its traceback and doesn't stop the other steps or regions.
+Exit codes: 0 ok, 1 a step failed / unhealthy, 2 configuration problem, 130 interrupted.
 
 ---
 

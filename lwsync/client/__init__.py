@@ -1,4 +1,9 @@
-"""Client module entry point and factory function."""
+"""Linnworks clients: the only code that talks to Linnworks, and it only reads.
+
+- LiveClient     real API calls (live.py), logged in by LinnworksAuthManager (auth.py)
+- FixtureClient  same methods, but reads made-up JSON from fixtures/ (offline runs and tests)
+Both follow the LinnworksClient interface in base.py, so the sync code works with either.
+"""
 
 from typing import Optional
 from lwsync.config import Config

@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS lw_orders (
     subsource VARCHAR(100) NULL COMMENT 'Channel subsource e.g. store name',
     
     -- Status
-    status VARCHAR(50) NOT NULL DEFAULT 'open' COMMENT 'open / parked / shipped / cancelled / refunded',
+    status VARCHAR(50) NOT NULL DEFAULT 'open' COMMENT 'open / parked / shipped / cancelled / refunded / deleted (removed in Linnworks)',
     raw_status VARCHAR(50) NULL COMMENT 'Raw Linnworks status string or code',
     is_hold_or_parked BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Hold or parked flag',
     folder_names VARCHAR(255) NULL COMMENT 'Linnworks folder names (comma separated)',
@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS lw_orders (
     currency VARCHAR(10) NOT NULL DEFAULT 'USD',
     subtotal DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     tax DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    shipping_charge DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    shipping_charge DECIMAL(10, 2) NOT NULL DEFAULT 0.00 COMMENT 'Shipping excluding tax; total = subtotal + tax + shipping_charge',
     total DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     payment_method VARCHAR(100) NULL,
     
@@ -176,19 +176,22 @@ CREATE TABLE IF NOT EXISTS lw_order_items (
     sku VARCHAR(100) NOT NULL,
     item_title VARCHAR(500) NULL,
     quantity INT NOT NULL DEFAULT 1,
-    unit_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    line_total DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
-    tax_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    unit_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00 COMMENT 'Price per unit excluding tax',
+    line_total DECIMAL(10, 2) NOT NULL DEFAULT 0.00 COMMENT 'Line total excluding tax, after discount (Linnworks Cost)',
+    tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0.00 COMMENT 'Tax rate in percent',
+    tax_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00 COMMENT 'Line tax; Linnworks Line cost = line_total + tax_amount',
     discount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     stock_item_id VARCHAR(64) NULL COMMENT 'Linnworks StockItemId (GUID)',
+    composite_child_sku VARCHAR(100) NULL COMMENT 'Composite listing: its single component, i.e. the stock item actually shipped (normally = Fill SKU). NULL if not composite or several components',
+    composite_children JSON NULL COMMENT 'Composite listing: all components as [{"sku","quantity","stock_item_id"}]; quantity = total units for the line',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
     UNIQUE KEY uq_order_items_region_order_row (region, order_id, row_id),
     INDEX idx_order_items_sku (sku),
     INDEX idx_order_items_order_id (order_id),
-    INDEX idx_order_items_stock_item_id (stock_item_id)
+    INDEX idx_order_items_stock_item_id (stock_item_id),
+    INDEX idx_order_items_composite_child_sku (composite_child_sku)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------

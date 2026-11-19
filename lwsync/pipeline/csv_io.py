@@ -1,5 +1,12 @@
-"""Positional CSV parsing with lossless records and minimal field replacements.
+"""Read the Linnworks AJC export CSV and change single cells without touching anything else.
 
+Why not Python's csv module: re-writing a file with it can change quoting, line endings or
+spacing, and the 3PL import expects the exact export format. Here each row keeps its original
+bytes plus the position of every cell, so a swap replaces only the SKU / Fill SKU bytes and
+the rest of the file stays byte-for-byte identical.
+
+Columns are found by position (the export has two columns both called "Item Number"), and
+the header must match HEADER exactly or the file is rejected.
 Errors deliberately omit cell contents: input contains customer data.
 """
 
@@ -20,10 +27,11 @@ HEADER = tuple((
     "GI_ShippingMethod,ShippingAccountType,GI_CarrierID,GI_OrderNumber,GI_OrderType,"
     "ShippingRule,GI_CustomerCode,GI_CarrierScac"
 ).split(","))
+# 0-based column positions in HEADER (Order Id is 0; "Fill SKU" is 43).
 SKU_COLUMN = 27
 QUANTITY_COLUMN = 29
 ITEM_NUMBER_COLUMNS = (38, 44)
-BOM = b"\xef\xbb\xbf"
+BOM = b"\xef\xbb\xbf"  # UTF-8 byte-order mark some exports start with; kept as-is
 
 
 class CsvFormatError(ValueError):
@@ -32,6 +40,9 @@ class CsvFormatError(ValueError):
 
 @dataclass(frozen=True)
 class CsvRecord:
+    """One CSV line: its exact bytes (raw), decoded cell values, and each cell's (start, end)
+    byte position within raw."""
+
     raw: bytes
     values: tuple[str, ...]
     spans: tuple[tuple[int, int], ...]
@@ -68,16 +79,20 @@ class CsvRecord:
 
 @dataclass(frozen=True)
 class CsvDocument:
+    """A whole export file: optional BOM, header row and data rows (one row per order line)."""
+
     prefix: bytes
     header: CsvRecord
     rows: tuple[CsvRecord, ...]
 
     def render(self, rows: Iterable[CsvRecord] | None = None) -> bytes:
+        """File bytes for the given rows (default: all), with the original BOM and header."""
         return self.prefix + self.header.raw + b"".join(
             row.raw for row in (self.rows if rows is None else rows)
         )
 
     def orders(self) -> dict[str, tuple[CsvRecord, ...]]:
+        """Rows grouped by order: {order id: its lines}. Decisions are made per order."""
         grouped: dict[str, list[CsvRecord]] = {}
         for row in self.rows:
             # Canonicalize numeric IDs so 001 and 1 cannot dispatch separately.
@@ -86,6 +101,12 @@ class CsvDocument:
 
 
 def _records(data: bytes) -> tuple[CsvRecord, ...]:
+    """Split CSV bytes into records, remembering each cell's byte span.
+
+    Standard CSV rules: cells separated by ",", optional double quotes, "" inside quotes is one
+    quote, quoted cells may contain commas and line breaks, rows end with LF or CRLF.
+    (Byte values: 34 = '"', 44 = ',', 10 = LF, 13 = CR.)
+    """
     records = []
     offset = 0
     while offset < len(data):
@@ -133,7 +154,12 @@ def _records(data: bytes) -> tuple[CsvRecord, ...]:
 
 
 def parse_csv(data: bytes) -> CsvDocument:
-    """Validate an entire UTF-8 Linnworks export before exposing any rows."""
+    """Parse and validate a whole export before returning any rows.
+
+    Rejects (CsvFormatError) a file that isn't valid UTF-8, has a different header, a row with
+    the wrong number of columns, a non-numeric order ID or quantity, or an empty SKU. A bad
+    file is never partly processed.
+    """
     if b"\x00" in data:
         raise CsvFormatError("NUL byte in CSV input")
     prefix = BOM if data.startswith(BOM) else b""

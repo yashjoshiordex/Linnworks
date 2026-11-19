@@ -1,4 +1,9 @@
-"""Fixture-based client reading realistic offline JSON payloads."""
+"""Offline client: returns made-up Linnworks responses from fixtures/<REGION>/*.json.
+
+Used when LW_MODE is not "live" and by the tests. The JSON mirrors the shape of real
+Linnworks responses (same field names), so the same sync code runs against it. Date
+ranges and paging are only roughly imitated: tests should not rely on filtering here.
+"""
 
 import json
 from pathlib import Path
@@ -18,6 +23,7 @@ class FixtureClient(LinnworksClient):
         """Load JSON file from fixtures/<region>/<filename>."""
         region_key = region.upper()
         file_path = self.fixtures_dir / region_key / filename
+        # A missing file means "no data of this kind" for that region, not an error.
         if not file_path.exists():
             logger.warning(f"Fixture file not found: {file_path}")
             return []
@@ -86,7 +92,11 @@ class FixtureClient(LinnworksClient):
     def get_order_details(
         self, region: str, order_id: str
     ) -> Optional[dict[str, Any]]:
-        """Find order details from processed or open orders fixture."""
+        """Find one order by ID in the processed or open orders fixtures.
+
+        Accepts both ID field names Linnworks uses: "OrderId" (newer endpoints) and
+        "pkOrderID" (older endpoints).
+        """
         for filename in ("orders_processed.json", "orders_open.json"):
             items = self._load_json(region, filename)
             if isinstance(items, list):

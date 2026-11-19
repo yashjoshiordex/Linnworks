@@ -1,5 +1,6 @@
 """V2 API and cursor regression tests using fake responses and database mocks."""
 
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 import json
 
@@ -134,7 +135,10 @@ def test_failure_never_advances_cursor(client, stage, region):
          patch.object(orders, "update_sync_success") as success, \
          patch.object(orders, "record_sync_error") as error, \
          patch("lwsync.sync.refunds.record_sync_error"), \
-         patch.object(orders, "get_db_cursor", side_effect=failure) as db:
+         patch.object(orders, "get_db_cursor", side_effect=failure) as db, \
+         patch.object(orders, "sync_open_orders", return_value=0) if stage != "open" else nullcontext():
+        # Open-orders persistence (incl. the deleted-order check) is covered separately;
+        # here the DB mock only represents the processed-orders write.
         with pytest.raises(requests.Timeout, match=f"{stage} failed"):
             orders.sync_orders_delta(client, region)
         success.assert_not_called()
@@ -150,10 +154,18 @@ def test_empty_success_advances_cursor(client, region):
     client.get_open_orders = MagicMock(return_value=[])
     client.get_processed_orders = MagicMock(return_value=[])
     client.get_refunds = MagicMock(return_value=[])
+    db_cursor = MagicMock()
+    db_cursor.fetchall.return_value = []
+    manager = MagicMock()
+    manager.__enter__.return_value = db_cursor
     with patch.object(orders, "get_sync_cursor", return_value="2026-11-01T00:00:00Z"), \
+         patch.object(orders, "get_db_cursor", return_value=manager), \
          patch.object(orders, "update_sync_success") as success, \
+         patch("lwsync.sync.refunds.update_sync_success") as refunds_success, \
          patch.object(orders, "record_sync_error") as error:
         assert orders.sync_orders_delta(client, region) == 0
+    # N1: a run with zero refunds still records the refunds cursor.
+    assert refunds_success.call_args.args == (region, "refunds")
     success.assert_called_once()
     assert success.call_args.args == (region, "orders")
     assert success.call_args.kwargs["new_cursor"].endswith("Z")
@@ -202,7 +214,8 @@ def test_page_failure_through_sync_preserves_cursor(client, region, stage):
         with pytest.raises(requests.Timeout, match="later page failed"):
             orders.sync_orders_delta(client, region)
         success.assert_not_called()
-        db.assert_not_called()
+        # Only the successful open-orders refresh may write; the failed stage never persists.
+        assert db.call_count == (1 if stage == "updated" else 0)
         refunds.assert_not_called()
     assert all(call.args[2].endswith("/v2/orders") for call in request.call_args_list)
 
@@ -221,7 +234,8 @@ def test_nonempty_success_persists_before_advancing_cursor(client, region):
          patch.object(orders, "sync_refunds", side_effect=lambda *args, **kwargs: events.append("refunds")), \
          patch.object(orders, "update_sync_success", side_effect=lambda *args, **kwargs: events.append("cursor")):
         assert orders.sync_orders_delta(client, region) == 1
-    assert events == ["persist", "commit", "refunds", "cursor"]
+    # First commit = open-orders refresh (empty list, deleted-order check), then processed orders.
+    assert events == ["commit", "persist", "commit", "refunds", "cursor"]
 
 
 def test_bad_request_reports_validation_without_retry_or_token(client):
@@ -348,3 +362,51 @@ def test_orders_pacing_uses_monotonic_clock_and_separate_accounts(client, monkey
         client._throttle("US", "https://us-api.linnworks.net/v2/orders")
         client._throttle("CA", "https://eu-api.linnworks.net/v2/orders")
     sleep.assert_called_once_with(1.5)
+
+
+def test_bad_request_list_of_messages_is_reported(client):
+    # Real Linnworks body for a too-old fromDate (18 Nov 2026).
+    response = requests.Response()
+    response.status_code = 400
+    response._content = b'["From Date must be within the last 35 days"]'
+    response.headers["Content-Type"] = "application/json"
+    with patch.object(client.session, "request", return_value=response) as request, \
+         patch.object(client, "_throttle"):
+        with pytest.raises(requests.HTTPError) as raised:
+            client.get_open_orders("US")
+    assert "From Date must be within the last 35 days" in str(raised.value)
+    request.assert_called_once()
+
+
+def _run_delta_and_get_from_date(client, **kwargs):
+    client.get_open_orders = MagicMock(return_value=[])
+    client.get_processed_orders = MagicMock(return_value=[])
+    client.get_refunds = MagicMock(return_value=[])
+    db_cursor = MagicMock()
+    db_cursor.fetchall.return_value = []
+    manager = MagicMock()
+    manager.__enter__.return_value = db_cursor
+    with patch.object(orders, "get_db_cursor", return_value=manager), \
+         patch.object(orders, "update_sync_success"), \
+         patch("lwsync.sync.refunds.update_sync_success"), \
+         patch.object(orders, "record_sync_error"):
+        orders.sync_orders_delta(client, "US", **kwargs)
+    from_str = client.get_processed_orders.call_args.args[1]
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc) - datetime.fromisoformat(from_str.replace("Z", "+00:00"))
+
+
+def test_days_over_35_is_clamped(client):
+    age = _run_delta_and_get_from_date(client, lookback_days=120)
+    assert orders.V2_MAX_LOOKBACK - orders.timedelta(minutes=1) <= age <= orders.V2_MAX_LOOKBACK + orders.timedelta(minutes=1)
+
+
+def test_old_cursor_is_clamped(client):
+    with patch.object(orders, "get_sync_cursor", return_value="2026-01-01T00:00:00Z"):
+        age = _run_delta_and_get_from_date(client)
+    assert age <= orders.V2_MAX_LOOKBACK + orders.timedelta(minutes=1)
+
+
+def test_days_within_limit_is_unchanged(client):
+    age = _run_delta_and_get_from_date(client, lookback_days=30)
+    assert orders.timedelta(days=30) - orders.timedelta(minutes=1) <= age <= orders.timedelta(days=30) + orders.timedelta(minutes=1)

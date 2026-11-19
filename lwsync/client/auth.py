@@ -1,15 +1,22 @@
-"""Authentication and session management for Linnworks API."""
+"""Logging in to Linnworks and keeping the session token per region.
+
+How Linnworks login works: we POST our app ID, app secret and the account's installation token
+to AuthorizeByApplication. Linnworks answers with a session token and the "Server" that hosts
+this account (e.g. https://us-ext.linnworks.net for US, https://eu-ext.linnworks.net for CA).
+Every later API call goes to that server with the session token in the Authorization header.
+"""
 
 import time
 from typing import Optional
 import requests
 from lwsync.config import Config
-from lwsync.logger import logger
+from lwsync.logger import logger, register_secret
 
 
 class LinnworksAuthSession:
     """Represents an active authenticated session for a specific region."""
 
+    # Linnworks sessions last about 20 minutes (1200 s) without use; we refresh before that.
     def __init__(self, token: str, server: str, expires_in_seconds: int = 1200):
         self.token = token
         # Strip trailing slash if present
@@ -23,7 +30,11 @@ class LinnworksAuthSession:
 
 
 class LinnworksAuthManager:
-    """Manages regional authorization tokens and re-authentication."""
+    """Logs in once per region and reuses the session until it is about to expire.
+
+    LiveClient also calls invalidate_session() when Linnworks answers 401, so the next request
+    logs in again.
+    """
 
     def __init__(
         self,
@@ -49,7 +60,7 @@ class LinnworksAuthManager:
 
         logger.info(f"Authenticating Linnworks session for region '{region_key}'...")
 
-        # Extract regional AppId, AppSecret, and Token
+        # Per-region credentials first, then the shared fallbacks. Values are never logged.
         reg_cfg = self.regional_config.get(region_key, {})
         app_id = reg_cfg.get("app_id") or self.fallback_app_id
         app_secret = reg_cfg.get("app_secret") or self.fallback_app_secret
@@ -74,6 +85,7 @@ class LinnworksAuthManager:
             timeout=Config.REQUEST_TIMEOUT,
         )
 
+        # Linnworks' error text explains why (e.g. invalid token); it contains no secrets.
         if response.status_code != 200:
             logger.error(
                 f"Linnworks authorization failed for region {region_key}: "
@@ -83,13 +95,14 @@ class LinnworksAuthManager:
 
         data = response.json()
         session_token = data.get("Token")
-        server = data.get("Server")
+        server = data.get("Server")  # the host for this account; see the module docstring
 
         if not session_token or not server:
             raise RuntimeError(
                 f"Invalid auth response from Linnworks for {region_key}: missing Token or Server"
             )
 
+        register_secret(session_token)  # never let the session token reach a log line
         new_session = LinnworksAuthSession(token=session_token, server=server)
         self._sessions[region_key] = new_session
         logger.info(f"Successfully authenticated region '{region_key}' against {server}")

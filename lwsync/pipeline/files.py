@@ -1,4 +1,11 @@
-"""Local file primitives. No API writes, rule decisions, or automated dispatch.
+"""Safe file operations for the pipeline's SFTP folders. No Linnworks calls, no rule decisions.
+
+The dangers this module guards against:
+- picking up a file Linnworks is still writing  -> only files unchanged for >= 60 s (pickup_files)
+- a file changing while we read it              -> size/mtime/inode checked before and after (read_stable)
+- the 3PL picking up a half-written file        -> write to a temp folder, then rename (atomic_publish)
+- overwriting an existing file                  -> renames that refuse to replace (_rename_exclusive)
+- two pipeline runs at once                     -> a Linux file lock (run_lock)
 
 Call these inside one run_lock. Durable dispatch/operation tracking is required
 before wiring them into a production runner (Deliverable 4).
@@ -32,12 +39,15 @@ class RunLockedError(RuntimeError):
 
 @dataclass(frozen=True)
 class FileSnapshot:
+    """File contents as read, plus its identity at that moment (to detect later changes)."""
+
     path: Path
     data: bytes
     identity: tuple[int, int, int, int, int]
 
 
 def _identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    """(device, inode, size, mtime, ctime): changes if the file is modified or replaced."""
     # On Windows ctime is creation time; path/handle caches may disagree after
     # writes. On Linux it is a useful additional mutation signal.
     changed = info.st_ctime_ns if os.name == "posix" else 0
@@ -45,6 +55,7 @@ def _identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
 
 
 def _stable_stat(path: Path, seconds: float, now: float) -> os.stat_result:
+    """stat() the file; raise unless it is a regular file (not a link) unchanged for `seconds`."""
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or now - info.st_mtime < seconds:
         raise UnstableFileError("Input is not a stable regular file")
@@ -52,6 +63,8 @@ def _stable_stat(path: Path, seconds: float, now: float) -> os.stat_result:
 
 
 def classify_file(path: Path, region: str) -> str | None:
+    """"ajc" or "cs" for an export named like us_ajc_orders....csv / ca_cs_orders....csv,
+    None for any other file (ignored by the pipeline)."""
     region = region.lower()
     if region not in ("us", "ca"):
         raise ValueError("Unknown pipeline region")
@@ -61,6 +74,8 @@ def classify_file(path: Path, region: str) -> str | None:
 
 def pickup_files(folder: Path, region: str, *, stable_seconds: float = 60,
                  now: float | None = None) -> tuple[Path, ...]:
+    """Export files in `folder` ready to process: right name for the region, and unchanged for
+    at least stable_seconds (so Linnworks has finished writing them). Sorted by name."""
     if not math.isfinite(stable_seconds) or stable_seconds < 60:
         raise ValueError("Stable interval must be at least 60 seconds")
     current = time.time() if now is None else now
@@ -80,6 +95,10 @@ def pickup_files(folder: Path, region: str, *, stable_seconds: float = 60,
 
 def read_stable(path: Path, *, stable_seconds: float = 60,
                 now: float | None = None) -> FileSnapshot:
+    """Read a stable file and prove it didn't change during the read (else UnstableFileError).
+
+    O_NOFOLLOW refuses symlinks, so a link can't point the pipeline at another file.
+    """
     if not math.isfinite(stable_seconds) or stable_seconds < 60:
         raise ValueError("Stable interval must be at least 60 seconds")
     before = _stable_stat(path, stable_seconds, time.time() if now is None else now)
@@ -98,13 +117,18 @@ def read_stable(path: Path, *, stable_seconds: float = 60,
 
 
 def assert_unchanged(snapshot: FileSnapshot) -> None:
+    """Raise if the file on disk is no longer exactly the one we read and validated."""
     if _identity(snapshot.path.lstat()) != snapshot.identity:
         raise UnstableFileError("Input changed after validation")
 
 
 @contextmanager
 def run_lock(path: Path):
-    """Linux flock, held on an open descriptor. Never unlink the lock file."""
+    """Allow only one pipeline run at a time (raises RunLockedError if another is running).
+
+    Linux flock on an open file: the OS releases it automatically if the process dies, so a
+    crash never leaves a stale lock. Never delete the lock file (another run may hold it).
+    """
     if not sys.platform.startswith("linux"):
         raise RuntimeError("Production pipeline locking requires Linux flock")
     import fcntl
@@ -126,6 +150,7 @@ def run_lock(path: Path):
 
 
 def _sync_directory(folder: Path) -> None:
+    """fsync a folder so a rename into or out of it survives a power cut."""
     if os.name == "posix":
         descriptor = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -147,6 +172,21 @@ def _rename_exclusive(source: Path, destination: Path) -> None:
         if rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1):
             code = ctypes.get_errno()
             raise OSError(code, os.strerror(code))
+    elif sys.platform == "darwin":
+        # Developer machines (production runs on Linux). renamex_np(RENAME_EXCL) is atomic and never replaces.
+        libc = ctypes.CDLL(None, use_errno=True)
+        renamex = getattr(libc, "renamex_np", None)
+        if renamex is not None:
+            renamex.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+            renamex.restype = ctypes.c_int
+            if renamex(os.fsencode(source), os.fsencode(destination), 0x00000004) == 0:  # RENAME_EXCL
+                return
+            code = ctypes.get_errno()
+            if code not in (errno.ENOTSUP, errno.EOPNOTSUPP):
+                raise OSError(code, os.strerror(code), str(destination))
+        # Filesystem without RENAME_EXCL: a hard link also refuses to overwrite (FileExistsError).
+        os.link(source, destination)
+        os.unlink(source)
     elif os.name == "nt":
         # Windows rename already refuses to replace an existing destination.
         os.rename(source, destination)
