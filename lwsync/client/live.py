@@ -1,7 +1,20 @@
-"""Live Linnworks API client with throttling, retry logic, and error handling."""
+"""Live Linnworks API client: read-only calls with throttling, retries and safe error messages.
 
-import time
+Endpoints used (all reads; this client never creates, changes or deletes anything in Linnworks):
+  GET  /api/Inventory/GetStockLocations                  locations
+  POST /api/Stock/GetStockItemsFull                      products, extended properties, stock levels
+  POST /api/Inventory/GetInventoryItemExtendedProperties extended properties for given items
+  GET  <account host>/v2/orders                          open and processed orders, with items
+  POST /api/ReturnsRefunds/SearchReturnsRefundsPaged     refunds
+(POST here is only how Linnworks takes search parameters; these calls still only read.)
+
+All calls go through _request(), which waits between requests, logs in again on 401, and
+retries 429 / 5xx / network errors with growing pauses.
+"""
+
 import json
+import logging
+import time
 import math
 from email.utils import parsedate_to_datetime
 from typing import Any, Optional
@@ -19,11 +32,15 @@ class LiveClient(LinnworksClient):
 
     def __init__(self, auth_manager: Optional[LinnworksAuthManager] = None):
         self.auth_manager = auth_manager or LinnworksAuthManager()
-        self.session = requests.Session()
-        self.last_request_time: dict[str, float] = {}
+        self.session = requests.Session()  # reuses HTTPS connections between calls
+        self.last_request_time: dict[str, float] = {}  # per region, for _throttle()
 
     def _throttle(self, region: str, endpoint: str = "") -> None:
-        """Enforce rate limits between consecutive requests."""
+        """Sleep if needed so requests to one region keep a minimum gap.
+
+        General calls: 1 / LW_RATE_LIMIT_RPS seconds apart. v2 orders pages: at least
+        1 / LW_ORDERS_RATE_LIMIT_RPS (slower, to be gentle with the heavier endpoint).
+        """
         min_interval = 1.0 / max(Config.RATE_LIMIT_RPS, 0.1)
         if endpoint.endswith("/v2/orders"):
             min_interval = max(min_interval, 1.0 / max(Config.ORDERS_RATE_LIMIT_RPS, 0.01))
@@ -35,7 +52,10 @@ class LiveClient(LinnworksClient):
 
     @staticmethod
     def _retry_after_seconds(response: requests.Response) -> Optional[float]:
-        """Parse Retry-After seconds or HTTP-date; ignore malformed values."""
+        """How long Linnworks asks us to wait (Retry-After header), in seconds, or None.
+
+        The header can be a number of seconds or an HTTP date; anything malformed is ignored.
+        """
         value = response.headers.get("Retry-After")
         if not isinstance(value, str) or not value.strip():
             return None
@@ -68,6 +88,8 @@ class LiveClient(LinnworksClient):
         while True:
             self._throttle(region_key, endpoint)
             auth_session = self.auth_manager.get_session(region_key)
+            # Most endpoints are relative and go to the server Linnworks assigned at login.
+            # v2 orders passes a full URL because it lives on a different host (see _v2_orders_url).
             if endpoint.startswith("http://") or endpoint.startswith("https://"):
                 url = endpoint
             else:
@@ -80,6 +102,7 @@ class LiveClient(LinnworksClient):
                 headers["Content-Type"] = "application/json"
 
             try:
+                request_started = time.monotonic()
                 response = self.session.request(
                     method=method,
                     url=url,
@@ -89,6 +112,13 @@ class LiveClient(LinnworksClient):
                     json=json_body,
                     timeout=Config.REQUEST_TIMEOUT,
                 )
+                elapsed = time.monotonic() - request_started
+                path = endpoint.split("?")[0]
+                if elapsed > Config.SLOW_REQUEST_SECONDS:
+                    logger.warning(f"[{region_key}] Slow Linnworks call: {method} {path} took {elapsed:.1f}s "
+                                   f"(HTTP {response.status_code})")
+                else:
+                    logger.debug(f"[{region_key}] {method} {path} -> HTTP {response.status_code} in {elapsed:.2f}s")
 
                 # Case 1: Session expired (401) -> re-authorize once and retry
                 if response.status_code == 401 and retries < Config.MAX_RETRIES:
@@ -120,7 +150,10 @@ class LiveClient(LinnworksClient):
                 response.raise_for_status()
                 return response.json() if response.content else None
 
+            # Network errors, HTTP errors raised above, and invalid JSON (ValueError) end up here.
             except (RequestException, ValueError) as err:
+                # A 400 from v2 orders means our query was rejected. Build a short, safe message
+                # from Linnworks' validation details so the log says what was wrong.
                 if (
                     isinstance(err, HTTPError)
                     and err.response is not None
@@ -144,6 +177,10 @@ class LiveClient(LinnworksClient):
                             message = json.dumps(details, ensure_ascii=True)
                     elif isinstance(problem, str):
                         message = problem
+                    elif isinstance(problem, list) and problem and all(isinstance(p, str) for p in problem):
+                        # Linnworks often sends a plain list of messages, e.g.
+                        # ["From Date must be within the last 35 days"].
+                        message = "; ".join(problem)
                     elif problem is None:
                         text = err.response.text.strip()
                         content_type = err.response.headers.get("Content-Type", "").lower()
@@ -194,7 +231,12 @@ class LiveClient(LinnworksClient):
     def get_products(
         self, region: str, page: int = 1, page_size: int = 200
     ) -> list[dict[str, Any]]:
-        """POST /api/Stock/GetStockItemsFull"""
+        """One page of the inventory: POST /api/Stock/GetStockItemsFull (max 200 per page).
+
+        dataRequirements asks Linnworks to include stock levels per location, prices, supplier
+        and extended properties in the same response, so one pass over the catalog gives the
+        data for both lw_products and lw_stock_levels.
+        """
         payload = {
             "keyword": "",
             "loadCompositeParents": True,
@@ -225,7 +267,10 @@ class LiveClient(LinnworksClient):
             if not batch:
                 break
             all_products.extend(batch)
-            logger.info(f"[{region.upper()}] Products page {page}: fetched {len(batch)} items (total so far: {len(all_products)})")
+            # Progress at INFO every 50 pages (a catalog is ~640 pages); every page at DEBUG.
+            level = logging.INFO if page % 50 == 0 or len(batch) < page_size else logging.DEBUG
+            logger.log(level, f"[{region.upper()}] Products page {page}: fetched {len(batch)} items "
+                              f"(total so far: {len(all_products)})")
             if len(batch) < page_size:
                 break  # Last page
             page += 1
@@ -244,7 +289,12 @@ class LiveClient(LinnworksClient):
     def get_stock_levels(
         self, region: str, location_id: Optional[str] = None
     ) -> list[dict[str, Any]]:
-        """Retrieve stock levels per SKU and location via GetStockItemsFull (StockLevels requirement)."""
+        """Stock per SKU and location, flattened from each item's StockLevels list.
+
+        Downloads the whole catalog, so it is slow (minutes). The "all" command avoids calling
+        it by reusing the catalog it already fetched (see __main__.execute_sync).
+        Linnworks keys: StockLevel = on hand, InOrderBook / InOrders = allocated to open orders.
+        """
         products = self.get_all_products(region, page_size=200)
         flattened = []
         for p in products:
@@ -266,7 +316,12 @@ class LiveClient(LinnworksClient):
         return flattened
 
     def _v2_orders_url(self, region: str) -> str:
-        """Use an explicit account host; never infer hosting from US/CA labels."""
+        """Full URL of the v2 orders endpoint for this account.
+
+        v2 orders isn't on the server returned at login: it is on us-api or eu-api, depending
+        on where Linnworks hosts the account. That isn't the selling country (the CA account is
+        hosted in the EU), so it must be set explicitly in .env; we never guess it from US/CA.
+        """
         region_key = region.upper()
         if region_key not in ("US", "CA"):
             raise ValueError(f"Unsupported Linnworks region: {region_key}")
@@ -287,7 +342,14 @@ class LiveClient(LinnworksClient):
         search_token: Optional[str] = None,
         order_ids: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        """Fetch one documented GET /v2/orders page. Errors always propagate."""
+        """Fetch ONE page of GET /v2/orders and check its shape. Errors always propagate.
+
+        Paging works with tokens, not page numbers: each response has NextSearchToken, which
+        is passed back as searchToken to get the next page (None means last page).
+        Response: {"OpenOrders": [...], "ProcessedOrders": [...], "NextSearchToken": ...}.
+        A malformed response raises instead of being treated as "no orders", because the
+        orders sync must never mistake missing data for orders that disappeared.
+        """
         url = self._v2_orders_url(region)
         if entries_per_page < 1:
             raise ValueError("entries_per_page must be positive")
@@ -298,7 +360,7 @@ class LiveClient(LinnworksClient):
             params = {
                 "entriesPerPage": min(entries_per_page, 200),
                 "includeProcessed": "true" if include_processed else "false",
-                "onlyPaid": "false",
+                "onlyPaid": "false",  # include unpaid (parked) orders too
             }
             # An explicit full-history lower bound avoids depending on the
             # server's behavior for an omitted date, without dropping old open
@@ -331,7 +393,12 @@ class LiveClient(LinnworksClient):
         from_date: Optional[str] = None,
         order_ids: Optional[list[str]] = None,
     ) -> list[dict[str, Any]]:
-        """Consume every token page, failing on cycles instead of returning partial data."""
+        """Read all v2 pages and return one list of orders, or raise. Never returns partial data.
+
+        Each order gets "_sync_status" ("open" or "shipped") from the list it came from.
+        lwsync.sync.orders turns that into the final status (e.g. cancelled).
+        If Linnworks returns a token it already gave us, paging would loop forever, so it raises.
+        """
         orders = []
         search_token = None
         seen_tokens: set[str] = set()
@@ -346,7 +413,10 @@ class LiveClient(LinnworksClient):
                 order_ids=order_ids,
             )
             page_number += 1
-            logger.info(
+            # Progress at INFO every 50 pages and on the last page; every page at DEBUG.
+            last_page = result["NextSearchToken"] is None
+            logger.log(
+                logging.INFO if page_number % 50 == 0 or last_page else logging.DEBUG,
                 f"[{region.upper()}] v2 orders page {page_number}: "
                 f"{len(result['OpenOrders'] or [])} open, "
                 f"{len(result['ProcessedOrders'] or [])} processed; "

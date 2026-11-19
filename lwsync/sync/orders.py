@@ -1,4 +1,19 @@
-"""Orders and order items synchronization worker (Open + Delta + Refunds)."""
+"""Sync orders into lw_orders and their lines into lw_order_items.
+
+One orders run (sync_orders_delta) does three steps:
+  1. Open orders: ALL current open orders are re-read every run (status, location and lines can
+     change at any time). Open orders in the DB that Linnworks no longer returns -> 'deleted'.
+  2. Changed orders: everything updated since the last run (cursor in lw_sync_state, minus a
+     10-minute overlap), including processed ones. That is how cancellations are picked up.
+  3. Refunds for the same window (refunds.py).
+
+Status values in lw_orders: open, parked (unpaid / on hold), shipped (processed), cancelled,
+refunded, deleted. In these accounts nothing is processed (shipped) in Linnworks; the
+Processed list only holds cancellations.
+
+Money: Linnworks is inconsistent between channels, so values are normalised here. The
+meaning of each column is documented in sql/001_create_tables.sql.
+"""
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -7,10 +22,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from lwsync.client.base import LinnworksClient
 from lwsync.config import Config
-from lwsync.db import get_db_cursor
+from lwsync.db import get_db_cursor, with_db_retry
 from lwsync.logger import logger
 from lwsync.sync.refunds import parse_utc_datetime, sync_refunds
 from lwsync.sync.state import get_sync_cursor, record_sync_error, update_sync_success
+
+
+# Linnworks rejects a v2 orders fromDate older than this (HTTP 400 "From Date must be within
+# the last 35 days", confirmed 18 Nov 2026). Windows are clamped to it, with a 5-minute margin
+# so a run that starts right at the limit isn't rejected.
+V2_MAX_LOOKBACK = timedelta(days=35) - timedelta(minutes=5)
 
 
 def _money(*values: Any, default: Any = "0") -> Decimal:
@@ -22,7 +43,34 @@ def _money(*values: Any, default: Any = "0") -> Decimal:
 
 
 def _is_true(value: Any) -> bool:
+    """True for a real True or the string "true" (any case). Linnworks sends both."""
     return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+def _composite_children(item: dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """Components of a composite listing line, as (single child SKU, JSON list of all children).
+
+    Most listing SKUs are composite items in Linnworks with exactly one component, the master
+    stock item that is actually shipped (e.g. CA-AJC-D7.5S-N-0-131347 -> AJC-D7S); about 85-91%
+    of open-order lines on 18 Nov 2026. The API nests them under the line as CompositeSubItems.
+    The child's Quantity is the total units for the line (parent qty 8 -> child qty 8). All money
+    stays on the parent line, so children are stored for reference only, not as extra lines.
+    Returns (None, None) for a non-composite line; the single SKU is None if there are several.
+    """
+    subs = [s for s in (item.get("CompositeSubItems") or []) if isinstance(s, dict)]
+    children = [
+        {
+            "sku": str(s.get("SKU") or s.get("ItemNumber") or "")[:100],
+            "quantity": int(s.get("Quantity") or 0),
+            "stock_item_id": str(s["StockItemId"]) if s.get("StockItemId") else None,
+        }
+        for s in subs
+    ]
+    children = [c for c in children if c["sku"]]
+    if not children:
+        return None, None
+    single = children[0]["sku"] if len(children) == 1 else None
+    return single, json.dumps(children)
 
 
 def is_cancelled_order(raw_order: dict[str, Any]) -> bool:
@@ -42,7 +90,13 @@ def _extract_order_and_items(
     raw_order: dict[str, Any],
     default_status: str = "open",
 ) -> Tuple[tuple, list[tuple]]:
-    """Parse raw Linnworks order payload into normalized tuples for lw_orders and lw_order_items."""
+    """Turn one raw Linnworks order into (row for lw_orders, rows for lw_order_items).
+
+    Pure function, no DB access, so it is easy to unit test. The tuple order must match the
+    column order in SQL_UPSERT_ORDER / SQL_UPSERT_ITEM below.
+    Most values try several field names (`a or b or c`) because older Linnworks endpoints and
+    the fixtures use different names than v2 (e.g. pkOrderID vs OrderId).
+    """
     region_key = region.upper()
 
     # Order ID & Numbers
@@ -69,7 +123,10 @@ def _extract_order_and_items(
     source = gen_info.get("Source") or raw_order.get("Source")
     subsource = gen_info.get("SubSource") or raw_order.get("SubSource")
 
-    # Status Mapping
+    # Status. raw_status keeps Linnworks' own code for reference (0 unpaid, 1 paid, 2 return,
+    # 3 pending, 4 resend). Our status is decided in this order:
+    #   cancelled flag -> 'cancelled'; from the processed list -> 'shipped';
+    #   open and on hold / unpaid -> 'parked'; otherwise 'open'.
     raw_status = gen_info.get("Status") if "Status" in gen_info else raw_order.get("Status")
     is_parked = bool(gen_info.get("IsParked", False) or gen_info.get("HoldOrParked", False) or gen_info.get("HoldOrWait", False))
 
@@ -85,11 +142,12 @@ def _extract_order_and_items(
     else:
         status = effective_status
 
-    # Folders
+    # Folders are user-defined labels in Linnworks, stored as a JSON list for reference only.
     folder_list = raw_order.get("FolderName") or raw_order.get("Folders") or []
     folders_str = json.dumps(folder_list) if isinstance(folder_list, list) else str(folder_list)
 
-    # Dates
+    # Dates, stored as UTC. ProcessedOn is empty for cancelled orders (Linnworks sends none),
+    # so processed_date stays NULL for them.
     date_received = parse_utc_datetime(
         gen_info.get("ReceivedDate") or raw_order.get("ReceivedDate") or raw_order.get("dReceivedDate")
     )
@@ -103,7 +161,9 @@ def _extract_order_and_items(
         or raw_order.get("dProcessedOn")
     )
 
-    # Customer
+    # Customer and addresses. Amazon orders may be redacted in Linnworks later, but the DB keeps
+    # what was synced before (COALESCE in the upsert never overwrites a value with NULL).
+    # Unpaid Amazon orders have no name or address yet.
     customer_name = (
         gen_info.get("Name")
         or addr_info.get("FullName")
@@ -134,7 +194,7 @@ def _extract_order_and_items(
     ship_postcode = addr_info.get("PostCode") or raw_order.get("cPostCode")
     ship_country = addr_info.get("Country") or raw_order.get("Country")
 
-    # Billing Address
+    # Billing address: falls back to the shipping address when Linnworks has none.
     bill_name = bill_info.get("FullName") or ship_name
     bill_company = bill_info.get("Company") or ship_company
     bill_a1 = bill_info.get("Address1") or ship_a1
@@ -187,6 +247,7 @@ def _extract_order_and_items(
         or raw_order.get("PostalTrackingNumber")
         or raw_order.get("TrackingNumber")
     )
+    # The location the order is assigned to (Default, US | AJC, ...); see lw_locations.
     fulfillment_loc_id = (
         raw_order.get("FulfilmentLocationId")
         or raw_order.get("LocationId")
@@ -240,7 +301,10 @@ def _extract_order_and_items(
         str(fulfillment_loc_id) if fulfillment_loc_id else None,
     )
 
-    # Line Items
+    # Line items. RowId identifies a line within the order and is the key in lw_order_items.
+    # SKU is the CHANNEL listing SKU (e.g. AJC-D5S-A-0-136709-V), not always the inventory SKU.
+    # For composite listings the stock item actually shipped is in composite_child_sku
+    # (normally equal to the listing's Fill SKU in lw_products).
     items_tuples = []
     raw_items = raw_order.get("Items") or []
     for item in raw_items:
@@ -251,6 +315,8 @@ def _extract_order_and_items(
             or item.get("StockItemId")
         )
         if not row_id:
+            logger.warning(f"[{region_key}] Order {order_number or order_id}: skipped a line without a RowId "
+                           f"(SKU {item.get('SKU') or item.get('ItemNumber') or '?'})")
             continue
 
         stock_item_id = item.get("StockItemId")
@@ -274,6 +340,7 @@ def _extract_order_and_items(
         tax_amount = _money(item.get("SalesTax"), item.get("TaxAmount"), item.get("Tax"))
         # DiscountValue is money; "Discount" is a percentage in Linnworks, so it is not used here.
         discount = _money(item.get("DiscountValue"), item.get("LineDiscount"))
+        composite_child_sku, composite_children = _composite_children(item)
 
         items_tuples.append((
             region_key,
@@ -288,11 +355,16 @@ def _extract_order_and_items(
             tax_rate,
             tax_amount,
             discount,
+            composite_child_sku,
+            composite_children,
         ))
 
     return order_tuple, items_tuples
 
 
+# Insert a new order or update the existing one (key: region + order_id).
+# Status and money are always overwritten with the latest values. Most other fields use
+# COALESCE(new, old): an empty value from Linnworks never wipes data we already have.
 SQL_UPSERT_ORDER = """
     INSERT INTO lw_orders (
         region, order_id, num_order_id, channel_reference_number,
@@ -363,13 +435,16 @@ SQL_UPSERT_ORDER = """
         updated_at = CURRENT_TIMESTAMP;
 """
 
+# Insert or update one order line (key: region + order_id + row_id).
 SQL_UPSERT_ITEM = """
     INSERT INTO lw_order_items (
         region, order_id, row_id, stock_item_id, sku, item_title,
-        quantity, unit_price, line_total, tax_rate, tax_amount, discount
+        quantity, unit_price, line_total, tax_rate, tax_amount, discount,
+        composite_child_sku, composite_children
     ) VALUES (
         %s, %s, %s, %s, %s, %s,
-        %s, %s, %s, %s, %s, %s
+        %s, %s, %s, %s, %s, %s,
+        %s, %s
     )
     ON DUPLICATE KEY UPDATE
         stock_item_id = VALUES(stock_item_id),
@@ -381,12 +456,18 @@ SQL_UPSERT_ITEM = """
         tax_rate = VALUES(tax_rate),
         tax_amount = VALUES(tax_amount),
         discount = VALUES(discount),
+        composite_child_sku = VALUES(composite_child_sku),
+        composite_children = VALUES(composite_children),
         updated_at = CURRENT_TIMESTAMP;
 """
 
 
 def _prune_stale_order_items(cursor, region: str, order_items_map: dict[str, set[str]]) -> None:
-    """Delete line items in lw_order_items that no longer exist in the order payload."""
+    """Delete DB lines that are no longer on the order in Linnworks (e.g. a line was removed).
+
+    order_items_map: order_id -> the RowIds Linnworks returned now. Lines not in that set are
+    deleted; an order with no lines at all loses all its lines.
+    """
     for order_id, row_ids in order_items_map.items():
         if row_ids:
             placeholders = ",".join(["%s"] * len(row_ids))
@@ -433,8 +514,45 @@ def _mark_missing_open_orders_deleted(cursor, region: str, seen_order_ids: set[s
     return len(missing)
 
 
+def _extract_batch(
+    region: str, raw_orders: List[Dict[str, Any]], default_status: str
+) -> Tuple[list, list, dict[str, set[str]], set[str]]:
+    """Map a list of raw orders, skipping (and reporting) any order that can't be read.
+
+    Returns (order rows, line rows, order_id -> RowIds, order IDs seen). An order that fails to
+    map is logged with its order number and left out, but its ID still counts as "seen" so the
+    deleted-order check never marks a real, open order as deleted just because one field was
+    odd. Its existing DB row and lines are left untouched until a later run reads it fine.
+    """
+    orders_batch: list = []
+    items_batch: list = []
+    order_items_map: dict[str, set[str]] = {}
+    seen_ids: set[str] = set()
+    failed: list[str] = []
+    for raw in raw_orders:
+        order_id = raw.get("OrderId") or raw.get("pkOrderID")
+        if order_id:
+            seen_ids.add(str(order_id))
+        try:
+            if not order_id:
+                raise ValueError("order has no OrderId")
+            order_tuple, item_tuples = _extract_order_and_items(region, raw, default_status=default_status)
+        except Exception as exc:
+            failed.append(f"{raw.get('NumOrderId') or order_id or '?'} ({exc})")
+            continue
+        orders_batch.append(order_tuple)
+        items_batch.extend(item_tuples)
+        order_items_map[order_tuple[1]] = {item[2] for item in item_tuples}
+    if failed:
+        logger.warning(
+            f"[{region}] Skipped {len(failed)} order(s) that could not be read: "
+            f"{'; '.join(failed[:10])}{' ...' if len(failed) > 10 else ''}"
+        )
+    return orders_batch, items_batch, order_items_map, seen_ids
+
+
 def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False) -> int:
-    """Synchronize current open orders with full line items into lw_orders and lw_order_items.
+    """Re-read ALL open orders (with lines) and upsert them, in one transaction.
 
     Open orders that were in lw_orders but are no longer returned by Linnworks
     (deleted in Linnworks) are marked 'deleted'.
@@ -447,32 +565,31 @@ def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False
         raw_orders = client.get_open_orders(region_key, page=1, page_size=200) or []
         logger.info(f"[{region_key}] Fetched {len(raw_orders)} open order(s).")
 
-        orders_batch = []
-        items_batch = []
-        order_items_map: dict[str, set[str]] = {}
-
-        for ro in raw_orders:
-            order_tuple, item_tuples = _extract_order_and_items(region_key, ro, default_status="open")
-            orders_batch.append(order_tuple)
-            items_batch.extend(item_tuples)
-            order_id = order_tuple[1]
-            order_items_map[order_id] = {item[2] for item in item_tuples}
+        # order_items_map: order_id -> RowIds seen now; seen_ids: every open order ID Linnworks
+        # returned (including any that couldn't be read), for the deleted-order check.
+        orders_batch, items_batch, order_items_map, seen_ids = _extract_batch(region_key, raw_orders, "open")
 
         if dry_run:
             logger.info(f"[{region_key}] [DRY-RUN] Would upsert {len(orders_batch)} orders and {len(items_batch)} items (deleted-order check skipped).")
             return len(orders_batch)
 
+        # One transaction for orders, lines, removed lines and the deleted check: all or nothing.
+        # with_db_retry runs the whole transaction again after a temporary DB error.
         chunk_size = 500
-        with get_db_cursor() as cursor:
-            for i in range(0, len(orders_batch), chunk_size):
-                cursor.executemany(SQL_UPSERT_ORDER, orders_batch[i : i + chunk_size])
 
-            for i in range(0, len(items_batch), chunk_size):
-                cursor.executemany(SQL_UPSERT_ITEM, items_batch[i : i + chunk_size])
+        def write() -> int:
+            with get_db_cursor() as cursor:
+                for i in range(0, len(orders_batch), chunk_size):
+                    cursor.executemany(SQL_UPSERT_ORDER, orders_batch[i : i + chunk_size])
 
-            _prune_stale_order_items(cursor, region_key, order_items_map)
+                for i in range(0, len(items_batch), chunk_size):
+                    cursor.executemany(SQL_UPSERT_ITEM, items_batch[i : i + chunk_size])
 
-            deleted_count = _mark_missing_open_orders_deleted(cursor, region_key, set(order_items_map))
+                _prune_stale_order_items(cursor, region_key, order_items_map)
+
+                return _mark_missing_open_orders_deleted(cursor, region_key, seen_ids)
+
+        deleted_count = with_db_retry(write, f"{region_key} open orders")
 
         if deleted_count:
             logger.info(f"[{region_key}] Marked {deleted_count} open order(s) no longer in Linnworks as deleted.")
@@ -482,14 +599,22 @@ def sync_open_orders(client: LinnworksClient, region: str, dry_run: bool = False
     except Exception as e:
         if not dry_run:
             record_sync_error(region_key, "orders", str(e))
-        logger.error(f"[{region_key}] Open orders sync failed: {e}")
+        logger.error(f"[{region_key}] Open orders sync failed: {e}")  # traceback: logged by the CLI
         raise
 
 
 def sync_orders_delta(
     client: LinnworksClient, region: str, dry_run: bool = False, lookback_days: Optional[int] = None
 ) -> int:
-    """Delta synchronization for processed/shipped/cancelled orders with configurable lookback window."""
+    """One full orders run: open orders, then orders changed since the last run, then refunds.
+
+    Window start ("from"):
+      --days N given          -> now minus N days (use the maximum, 35, on the very first run)
+      saved cursor            -> previous run's end time minus ORDER_DELTA_OVERLAP_MINUTES
+      no cursor (first run)   -> now minus 7 days
+    The cursor only moves forward after every step succeeded, so a failed run is simply
+    retried from the same point next time.
+    """
     region_key = region.upper()
     now_utc = datetime.now(timezone.utc)
     overlap_minutes = Config.ORDER_DELTA_OVERLAP_MINUTES
@@ -504,10 +629,23 @@ def sync_orders_delta(
                 last_dt = datetime.fromisoformat(cursor_val.replace("Z", "+00:00"))
                 from_dt = last_dt - timedelta(minutes=overlap_minutes)
             except Exception:
+                # Unreadable cursor: fall back to the last day rather than failing the run.
                 from_dt = now_utc - timedelta(days=1)
         else:
             # Default lookback if initial run: 7 days
             from_dt = now_utc - timedelta(days=7)
+
+    # Never ask for more than Linnworks allows. This matters for --days > 35 and for a cursor
+    # that is older than 35 days (sync stopped for over a month): changes older than the
+    # limit can't be read from v2 any more, so the log says so instead of failing every run.
+    earliest = now_utc - V2_MAX_LOOKBACK
+    if from_dt < earliest:
+        logger.warning(
+            f"[{region_key}] Requested start {from_dt.strftime('%Y-%m-%dT%H:%M:%SZ')} is older than "
+            f"Linnworks allows (35 days); using {earliest.strftime('%Y-%m-%dT%H:%M:%SZ')}. "
+            "Changes to processed orders before that date are not picked up."
+        )
+        from_dt = earliest
 
     from_str = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     to_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -518,31 +656,29 @@ def sync_orders_delta(
         # Step 1: Open Orders (Always refreshed every run to catch status & line items)
         open_count = sync_open_orders(client, region_key, dry_run=dry_run)
 
-        # Step 2: Processed / Changed Orders Delta
+        # Step 2: every order (open or processed) updated since from_str. Open orders appear again
+        # here, which is harmless: the upsert gives the same result.
         processed_orders = client.get_processed_orders(region_key, from_str, to_str, page=1, page_size=200)
         logger.info(f"[{region_key}] Fetched {len(processed_orders)} processed order(s) in delta window.")
 
-        processed_batch = []
-        processed_items = []
-        order_items_map: dict[str, set[str]] = {}
-
-        for po in processed_orders:
-            order_tuple, item_tuples = _extract_order_and_items(region_key, po, default_status="shipped")
-            processed_batch.append(order_tuple)
-            processed_items.extend(item_tuples)
-            order_id = order_tuple[1]
-            order_items_map[order_id] = {item[2] for item in item_tuples}
+        processed_batch, processed_items, order_items_map, _ = _extract_batch(
+            region_key, processed_orders, "shipped"
+        )
 
         if not dry_run and processed_batch:
             chunk_size = 500
-            with get_db_cursor() as cursor:
-                for i in range(0, len(processed_batch), chunk_size):
-                    cursor.executemany(SQL_UPSERT_ORDER, processed_batch[i : i + chunk_size])
 
-                for i in range(0, len(processed_items), chunk_size):
-                    cursor.executemany(SQL_UPSERT_ITEM, processed_items[i : i + chunk_size])
+            def write() -> None:
+                with get_db_cursor() as cursor:
+                    for i in range(0, len(processed_batch), chunk_size):
+                        cursor.executemany(SQL_UPSERT_ORDER, processed_batch[i : i + chunk_size])
 
-                _prune_stale_order_items(cursor, region_key, order_items_map)
+                    for i in range(0, len(processed_items), chunk_size):
+                        cursor.executemany(SQL_UPSERT_ITEM, processed_items[i : i + chunk_size])
+
+                    _prune_stale_order_items(cursor, region_key, order_items_map)
+
+            with_db_retry(write, f"{region_key} changed orders")
 
         # Step 3: Refunds Delta
         # update_state=True so lw_sync_state gets a 'refunds' row on every run (even with 0 refunds).
@@ -559,6 +695,6 @@ def sync_orders_delta(
     except Exception as e:
         if not dry_run:
             record_sync_error(region_key, "orders", str(e))
-        logger.error(f"[{region_key}] Orders delta sync failed: {e}")
+        logger.error(f"[{region_key}] Orders delta sync failed: {e}")  # traceback: logged by the CLI
         raise
 

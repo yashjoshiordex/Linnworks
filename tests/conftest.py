@@ -12,3 +12,9 @@ _test_db = os.environ.get("LWSYNC_TEST_DB_NAME", "lwsync_test")
 if os.environ.get("DB_NAME") and os.environ["DB_NAME"] != _test_db:
     print(f"[tests] Ignoring DB_NAME={os.environ['DB_NAME']}; tests use {_test_db}")
 os.environ["DB_NAME"] = _test_db
+
+# Tests never write to the real log files: no <job>.log unless a test asks for one, and any
+# file logging goes to a temporary folder.
+import tempfile
+os.environ["LW_LOG_TO_FILE"] = "false"
+os.environ["LW_LOG_DIR"] = tempfile.mkdtemp(prefix="lwsync-test-logs-")

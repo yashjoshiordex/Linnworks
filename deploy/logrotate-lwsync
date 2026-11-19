@@ -1,0 +1,17 @@
+# Log rotation for lwsync. Install: sudo cp deploy/logrotate-lwsync /etc/logrotate.d/lwsync
+# Check (dry run): sudo logrotate -d /etc/logrotate.d/lwsync
+# Daily, kept 90 days, compressed (the newest rotated file stays uncompressed for one day so a
+# run still writing to it isn't disturbed). lwsync reopens its file by itself after rotation.
+/home/ubuntu/lwsync-logs/*.log {
+    su ubuntu ubuntu
+    daily
+    rotate 90
+    maxage 90
+    missingok
+    notifempty
+    compress
+    delaycompress
+    dateext
+    dateformat -%Y%m%d
+    create 0640 ubuntu ubuntu
+}

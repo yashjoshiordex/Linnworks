@@ -362,3 +362,51 @@ def test_orders_pacing_uses_monotonic_clock_and_separate_accounts(client, monkey
         client._throttle("US", "https://us-api.linnworks.net/v2/orders")
         client._throttle("CA", "https://eu-api.linnworks.net/v2/orders")
     sleep.assert_called_once_with(1.5)
+
+
+def test_bad_request_list_of_messages_is_reported(client):
+    # Real Linnworks body for a too-old fromDate (18 Nov 2026).
+    response = requests.Response()
+    response.status_code = 400
+    response._content = b'["From Date must be within the last 35 days"]'
+    response.headers["Content-Type"] = "application/json"
+    with patch.object(client.session, "request", return_value=response) as request, \
+         patch.object(client, "_throttle"):
+        with pytest.raises(requests.HTTPError) as raised:
+            client.get_open_orders("US")
+    assert "From Date must be within the last 35 days" in str(raised.value)
+    request.assert_called_once()
+
+
+def _run_delta_and_get_from_date(client, **kwargs):
+    client.get_open_orders = MagicMock(return_value=[])
+    client.get_processed_orders = MagicMock(return_value=[])
+    client.get_refunds = MagicMock(return_value=[])
+    db_cursor = MagicMock()
+    db_cursor.fetchall.return_value = []
+    manager = MagicMock()
+    manager.__enter__.return_value = db_cursor
+    with patch.object(orders, "get_db_cursor", return_value=manager), \
+         patch.object(orders, "update_sync_success"), \
+         patch("lwsync.sync.refunds.update_sync_success"), \
+         patch.object(orders, "record_sync_error"):
+        orders.sync_orders_delta(client, "US", **kwargs)
+    from_str = client.get_processed_orders.call_args.args[1]
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc) - datetime.fromisoformat(from_str.replace("Z", "+00:00"))
+
+
+def test_days_over_35_is_clamped(client):
+    age = _run_delta_and_get_from_date(client, lookback_days=120)
+    assert orders.V2_MAX_LOOKBACK - orders.timedelta(minutes=1) <= age <= orders.V2_MAX_LOOKBACK + orders.timedelta(minutes=1)
+
+
+def test_old_cursor_is_clamped(client):
+    with patch.object(orders, "get_sync_cursor", return_value="2026-01-01T00:00:00Z"):
+        age = _run_delta_and_get_from_date(client)
+    assert age <= orders.V2_MAX_LOOKBACK + orders.timedelta(minutes=1)
+
+
+def test_days_within_limit_is_unchanged(client):
+    age = _run_delta_and_get_from_date(client, lookback_days=30)
+    assert orders.timedelta(days=30) - orders.timedelta(minutes=1) <= age <= orders.timedelta(days=30) + orders.timedelta(minutes=1)

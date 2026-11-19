@@ -182,13 +182,16 @@ CREATE TABLE IF NOT EXISTS lw_order_items (
     tax_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00 COMMENT 'Line tax; Linnworks Line cost = line_total + tax_amount',
     discount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     stock_item_id VARCHAR(64) NULL COMMENT 'Linnworks StockItemId (GUID)',
+    composite_child_sku VARCHAR(100) NULL COMMENT 'Composite listing: its single component, i.e. the stock item actually shipped (normally = Fill SKU). NULL if not composite or several components',
+    composite_children JSON NULL COMMENT 'Composite listing: all components as [{"sku","quantity","stock_item_id"}]; quantity = total units for the line',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
     UNIQUE KEY uq_order_items_region_order_row (region, order_id, row_id),
     INDEX idx_order_items_sku (sku),
     INDEX idx_order_items_order_id (order_id),
-    INDEX idx_order_items_stock_item_id (stock_item_id)
+    INDEX idx_order_items_stock_item_id (stock_item_id),
+    INDEX idx_order_items_composite_child_sku (composite_child_sku)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------

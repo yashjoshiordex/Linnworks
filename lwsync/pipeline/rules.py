@@ -1,4 +1,14 @@
-"""Rule Evaluation Engine for the 3PL Order Processing Pipeline."""
+"""EARLY DRAFT rule engine for the 3PL pipeline. To be rewritten; not used in production.
+
+It predates the client's decisions and differs from the agreed design (3PL-Pipeline-Prompt.md):
+- matches the order line's SKU; the final engine must match on Fill SKU (order lines carry
+  channel listing SKUs such as AJC-D5S-A-0-136709-V; only Fill SKU holds the master SKU);
+- uses a stock threshold per pair; the agreed rules use a quantity limit and the
+  "Substitution Approved" order identifier;
+- prepares stock adjustments for Linnworks; the client decided Linnworks only gets a NOTE
+  on a swap (no SKU or stock changes), so these adjustments must never be posted.
+Kept for its tests and as a starting point.
+"""
 
 from dataclasses import dataclass, field
 from enum import Enum
@@ -9,7 +19,7 @@ from lwsync.pipeline.config import PipelineConfig, SkuPairRule
 
 
 class PipelineAction(str, Enum):
-    """Fulfillment decisions for order routing."""
+    """What happens to a line or order: send as is, swap to the substitute, hold, or error."""
     SEND = "send"
     SWAP = "swap"
     HOLD = "hold"
@@ -43,7 +53,8 @@ class OrderEvaluationResult:
     hold_reasons: List[str] = field(default_factory=list)
 
 
-# Type alias for stock lookup function: (region: str, sku: str, location_id: str) -> dict(on_hand, allocated, available)
+# Stock lookup passed in by the caller (e.g. reading lw_stock_levels), so the engine itself does
+# no I/O and is easy to test: (region, sku, location_id) -> {"on_hand", "allocated", "available"}.
 StockLookupCallable = Callable[[str, str, str], Dict[str, int]]
 
 
@@ -120,6 +131,7 @@ class RuleEngine:
                 f"AUTO-SWAP: Substituted {rule.primary_sku} with {rule.substitute_sku}. "
                 f"Reason: Stock below threshold (Available: {primary_available}, Threshold: {rule.threshold})."
             )
+            # DRAFT ONLY: the client decided against stock changes in Linnworks. Never post these.
             adjustments = [
                 {
                     "SKU": rule.primary_sku,

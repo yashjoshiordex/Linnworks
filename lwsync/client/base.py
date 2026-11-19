@@ -1,4 +1,10 @@
-"""Abstract base class defining the Linnworks client interface."""
+"""The interface every Linnworks client implements (LiveClient and FixtureClient).
+
+Methods return Linnworks' raw JSON objects (dicts) as received. Turning them into DB rows is
+the job of the lwsync.sync modules, so field-name quirks are handled in one place there.
+Not every method is used by the current sync: the live orders sync uses LiveClient's v2
+methods (get_orders_v2), see live.py.
+"""
 
 from abc import ABC, abstractmethod
 from typing import Any, Optional
